@@ -1,6 +1,7 @@
 // sa3-3ds: pmd-red-3ds's renderer (port/core/ppu.c at commit 9a79b39), unchanged
-// but for the #undef before `#define gPortRegs sRegs` and the profile's timing
-// in Ppu_RenderLine (gPpuTicks, gPpuProf: off unless set). Its wide view, HUD row
+// but for the #undef before `#define gPortRegs sRegs`, the profile's timing
+// in Ppu_RenderLine (gPpuTicks, gPpuProf: off unless set) and counts
+// (gPpuStat), and in Compose: effects that change nothing taken as none. Its wide view, HUD row
 // and drawing list are never switched on here. Copy changes over from
 // pmd-red-3ds as they come.
 
@@ -871,6 +872,10 @@ static void RenderObjects(int line, uint16_t dispcnt)
         else if (y + boundH > 256) y -= 256;
         if (line < y || line >= y + boundH)
             continue;
+        gPpuStat[PPU_ST_OBJ_ROWS]++; // (sa3-3ds: the profile)
+        gPpuStat[PPU_ST_OBJ_PIXELS] += (uint32_t)boundW;
+        if (affine)
+            gPpuStat[PPU_ST_OBJ_AFFINE_ROWS]++;
         int ly = line;
         int objMosaic = (a0 >> 12) & 1;
         if (objMosaic) ly -= ly % mosV;
@@ -1107,9 +1112,27 @@ static void Compose(int line, uint16_t *dst, const int bgOn[4], const int bgPrio
     if (evb > 16) evb = 16;
     if (evy > 16) evy = 16;
     int effect = (bldcnt >> 6) & 3;
+    // sa3-3ds: effects that change nothing, as none (the same pixels: checked
+    // by tools/test/test_renderer against the reference). sa3 keeps its
+    // fade effect on at strength 0 when nothing fades.
+    gPpuStat[PPU_ST_LINES]++;
+    if (effect)
+        gPpuStat[PPU_ST_EFFECT1 + effect - 1]++;
+    if ((effect == 2 || effect == 3) && evy == 0) {
+        effect = 0;
+        gPpuStat[PPU_ST_EFFECT_NONE]++;
+    }
+    else if (effect == 1 && eva == 16 && evb == 0) {
+        effect = 0;
+        gPpuStat[PPU_ST_EFFECT_NONE]++;
+    }
 
     uint8_t winout6;
     unsigned wmAll = WindowMask(line, dispcnt, wm, &winout6);
+    if (wmAll != 0x3F)
+        gPpuStat[PPU_ST_WINDOWS]++;
+    if (sObjSemiAny)
+        gPpuStat[PPU_ST_SEMI]++;
 
     // Per group, the window bits set in all its pixels / in some (groups
     // wholly inside or outside a window skip the per-pixel test below).

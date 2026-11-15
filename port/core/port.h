@@ -61,6 +61,15 @@ void Ppu_RunFrameUndrawn(void);
 enum { PROF_BG, PROF_OBJ, PROF_COMPOSE, PROF_PREPARE, PROF_LINES_OTHER, PROF_COUNT };
 void Port_SetProfiling(uint64_t (*ticks)(void)); // NULL: off
 void Port_TakeProfile(uint64_t out[PROF_COUNT]);
+// ... and the renderer's counts since the last call (same order as
+// pmd/port.h's PPU_ST_*): lines; lines with alpha / brighten / darken; of
+// those, effects that change nothing; lines with windows; with
+// semi-transparent sprites; sprite rows, their pixels, rotated sprite rows.
+enum {
+    STAT_LINES, STAT_ALPHA, STAT_BRIGHTEN, STAT_DARKEN, STAT_NO_EFFECT, STAT_WINDOWS, STAT_SEMI,
+    STAT_OBJ_ROWS, STAT_OBJ_PIXELS, STAT_OBJ_AFFINE_ROWS, STAT_COUNT
+};
+void Port_TakeStats(uint32_t out[STAT_COUNT]);
 
 // --- Backend (implemented once per platform) ------------------------------------
 

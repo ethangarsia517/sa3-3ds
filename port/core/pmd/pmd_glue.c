@@ -13,6 +13,7 @@ void Backend_Fatal(const char *msg) __attribute__((noreturn));
 int gPortScreenW = GBA_W, gPortScreenH = GBA_H;
 uint64_t (*gPpuTicks)(void);
 uint64_t gPpuProf[3];
+uint32_t gPpuStat[PPU_ST_COUNT];
 int16_t gPortOamY[128];
 struct PortWinX gPortWin1X[SCREEN_H_MAX];
 

@@ -69,6 +69,14 @@ Not checked: the final devkitARM link, 3dsxtool, and anything at run time.
    - automatic frame skip (done): the game at full speed, fewer frames drawn;
    - present on the GPU (done: pmd-red-3ds's, the 1.5x scaling bilinear);
    - the drawing profile in port.log (done) to choose what to speed up next;
+     third run: the game at ~58 fps, but drawn only 15 (the skip rule
+     skipped 3 of every 4 frames as drawing, 25-30 ms, never fit in one
+     frame) with ~9 ms a frame idle; compose 14-16 ms (5 where its fast path
+     works), backgrounds 4-10, sprites 3-18;
+   - frame skip allows a frame to end up to one frame late (the next one
+     not drawn makes it up): every other frame drawn at these speeds;
+   - effects that change nothing (brighten/darken at 0, alpha 16/0) taken
+     as none in compose; counts of what lines use, in port.log;
    - present on the GPU (citro3d) with scaling, as pmd-red-3ds does, instead
      of the CPU copy;
    - the sound mixer on the second core (Old 3DS: the system core).

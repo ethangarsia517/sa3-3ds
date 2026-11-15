@@ -37,5 +37,13 @@ int Ppu_ListObjects(int lines);
 // its time in the backgrounds, the sprites and compositing to gPpuProf[0-2].
 extern uint64_t (*gPpuTicks)(void);
 extern uint64_t gPpuProf[3];
+// ... and counts: lines drawn; lines with a colour effect (alpha, brighten,
+// darken), of them how many change nothing; lines with windows; lines with
+// semi-transparent sprites; sprite rows drawn, their pixels, rotated rows.
+enum {
+    PPU_ST_LINES, PPU_ST_EFFECT1, PPU_ST_EFFECT2, PPU_ST_EFFECT3, PPU_ST_EFFECT_NONE, PPU_ST_WINDOWS, PPU_ST_SEMI,
+    PPU_ST_OBJ_ROWS, PPU_ST_OBJ_PIXELS, PPU_ST_OBJ_AFFINE_ROWS, PPU_ST_COUNT
+};
+extern uint32_t gPpuStat[PPU_ST_COUNT];
 
 #endif

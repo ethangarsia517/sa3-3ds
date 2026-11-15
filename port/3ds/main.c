@@ -95,9 +95,21 @@ static void MeterEndFrame(void)
                     (double)TicksToMs(prof[PROF_BG], sMeterDrawn), (double)TicksToMs(prof[PROF_OBJ], sMeterDrawn),
                     (double)TicksToMs(prof[PROF_COMPOSE], sMeterDrawn), (double)TicksToMs(prof[PROF_PREPARE], sMeterDrawn),
                     (double)TicksToMs(prof[PROF_LINES_OTHER], sMeterDrawn));
+        uint32_t st[STAT_COUNT];
+        Port_TakeStats(st);
+        float lines = st[STAT_LINES] ? (float)st[STAT_LINES] : 1.0f, frames = sMeterDrawn ? (float)sMeterDrawn : 1.0f;
+        Backend_Log("  lines with: alpha %.0f%% brighten %.0f%% darken %.0f%% (no change %.0f%%) windows %.0f%% semi-sprites %.0f%%;"
+                    " per frame: sprite rows %.0f, pixels %.0f, rotated rows %.0f",
+                    (double)(100.0f * st[STAT_ALPHA] / lines), (double)(100.0f * st[STAT_BRIGHTEN] / lines),
+                    (double)(100.0f * st[STAT_DARKEN] / lines), (double)(100.0f * st[STAT_NO_EFFECT] / lines),
+                    (double)(100.0f * st[STAT_WINDOWS] / lines), (double)(100.0f * st[STAT_SEMI] / lines),
+                    (double)(st[STAT_OBJ_ROWS] / frames), (double)(st[STAT_OBJ_PIXELS] / frames),
+                    (double)(st[STAT_OBJ_AFFINE_ROWS] / frames));
     } else if (sLog != NULL) {
         uint64_t prof[PROF_COUNT];
+        uint32_t st[STAT_COUNT];
         Port_TakeProfile(prof); // (only the logged second's)
+        Port_TakeStats(st);
     }
     (void)sProfTotal;
     memset(sPartTicks, 0, sizeof(sPartTicks));
@@ -124,9 +136,11 @@ static void WaitForFrame(void)
 // --- Frame skip -----------------------------------------------------------------------
 //
 // The game always runs every frame (so it plays and sounds at full speed);
-// drawing a frame is left out when there isn't time for it before the
-// frame's deadline: the time drawing has been taking (an average), from now.
-// Never more than MAX_SKIP frames in a row (15 drawn a second at worst).
+// drawing a frame is left out when, at the time drawing has been taking (an
+// average), it would end more than a frame past this frame's deadline. A
+// frame drawn late is made up by the one(s) after it not being drawn: with
+// drawing at 20-33 ms, every other frame is drawn (30 a second). Never more
+// than MAX_SKIP frames in a row (15 drawn a second at worst).
 
 #define MAX_SKIP 3
 static u64 sDrawCost = FRAME_TICKS / 2; // ticks: drawing and presenting a frame (average)
@@ -136,7 +150,7 @@ static int sSkipRun;
 bool Backend_ShouldDraw(void)
 {
     u64 now = svcGetSystemTick();
-    bool skip = sSkipOn && sDeadline != 0 && now + sDrawCost > sDeadline && sSkipRun < MAX_SKIP;
+    bool skip = sSkipOn && sDeadline != 0 && now + sDrawCost > sDeadline + FRAME_TICKS && sSkipRun < MAX_SKIP;
     sSkipRun = skip ? sSkipRun + 1 : 0;
     return !skip;
 }

@@ -19,7 +19,17 @@ extern IntrFunc gIntrTable[16];
 extern uint64_t (*gPpuTicks)(void);
 extern uint64_t gPpuProf[3];
 
+extern uint32_t gPpuStat[STAT_COUNT];
+
 static uint64_t sProf[PROF_COUNT];
+
+void Port_TakeStats(uint32_t out[STAT_COUNT])
+{
+    for (int i = 0; i < STAT_COUNT; i++) {
+        out[i] = gPpuStat[i];
+        gPpuStat[i] = 0;
+    }
+}
 
 void Port_SetProfiling(uint64_t (*ticks)(void))
 {
