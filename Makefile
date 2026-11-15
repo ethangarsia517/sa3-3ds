@@ -16,7 +16,7 @@ BUILD    := $(ROOT)/build
 WIDE     ?= 0
 JOBS     ?= $(shell nproc 2>/dev/null || echo 4)
 
-.PHONY: all prelink 3ds clean
+.PHONY: all prelink 3ds clean test
 all: 3ds
 
 # ---------------------------------------------------------------------------
@@ -31,6 +31,14 @@ prelink:
 	@$(MAKE) -C $(UPSTREAM) PLATFORM=3ds WIDE=$(WIDE) PORT_TOOLS=$(ROOT)/tools -j$(JOBS)
 	@cp $(UPSTREAM)/sa3-game.o $(PRELINK)
 	@echo "  ->   $(PRELINK) (partial; WIDE=$(WIDE))"
+
+# The renderer against pmd-red-3ds's reference one, on this computer
+# (tools/test/test_renderer.c): needs only a C compiler.
+test:
+	@mkdir -p $(BUILD)
+	@cc -O2 -Wall -Wno-unused-parameter -o $(BUILD)/test_renderer tools/test/test_renderer.c tools/test/ppu_ref.c \
+		port/core/pmd/ppu.c port/core/pmd/bgcache.c port/core/pmd/pmd_glue.c -Iport/core/pmd
+	@$(BUILD)/test_renderer
 
 clean:
 	rm -rf $(BUILD)/3ds $(PRELINK) $(BUILD)/sa3-3ds.*

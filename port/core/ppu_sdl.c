@@ -1,4 +1,6 @@
-// The GBA picture, drawn in software a scanline at a time.
+// The GBA picture, drawn in software a scanline at a time: sa3's own renderer.
+// Used by WIDE=1 builds (400x240), which pmd-red-3ds's renderer
+// (pmd/ppu.c, ppu_frame.c) can't draw; 240x160 builds use that one.
 //
 // From sa3's SDL layer (src/platform/pret_sdl/sdl2.c), which comes from
 // Kurausukun's pokeemerald pc_port (thanks to camthesaxman, Kurausukun,
@@ -866,7 +868,7 @@ uint16_t *memsetu16(uint16_t *dst, uint16_t fill, size_t count)
     return 0;
 }
 
-void Ppu_DrawFrame(uint16_t *pixels)
+void Ppu_DrawFrameSdl(uint16_t *pixels)
 {
     int i;
     uint16_t(*scanlines)[DISPLAY_WIDTH] = (uint16_t(*)[DISPLAY_WIDTH])pixels;

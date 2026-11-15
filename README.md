@@ -36,5 +36,5 @@ CPU and links with the 3DS backend; nothing has run yet. See
   build.
 - Kurausukun, camthesaxman, Pidgey and NT_x86 for the pokeemerald `pc_port` code that
   sa3's SDL layer, and so this port's renderer and BIOS functions, come from.
-- pmd-red-3ds and the projects it credits (Twin Embers, pokeemerald-3Ds-dualscreen)
-  for the 3DS porting approach.
+- pmd-red-3ds, whose renderer this port uses, and the projects it credits (Twin
+  Embers, pokeemerald-3Ds-dualscreen) for the 3DS porting approach.

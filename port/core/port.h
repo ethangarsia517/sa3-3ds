@@ -46,8 +46,11 @@ void Port_Describe(char *buf, int size);
 
 // Draws a whole frame, line by line, running the HBlank/VCount interrupts
 // and HBlank DMAs between lines as the GBA does. `out` is DISPLAY_WIDTH x
-// DISPLAY_HEIGHT GBA colours (BGR555, bit 15 set).
-void Ppu_DrawFrame(uint16_t *out);
+// DISPLAY_HEIGHT GBA colours (BGR555; bit 15 not meaningful).
+// Ppu_DrawFramePmd: pmd-red-3ds's renderer (ppu_frame.c, pmd/), 240x160 only.
+// Ppu_DrawFrameSdl: sa3's own (ppu_sdl.c), any size.
+void Ppu_DrawFramePmd(uint16_t *out);
+void Ppu_DrawFrameSdl(uint16_t *out);
 
 // --- Backend (implemented once per platform) ------------------------------------
 

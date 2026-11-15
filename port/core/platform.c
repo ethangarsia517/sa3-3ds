@@ -140,7 +140,11 @@ void VBlankIntrWait(void)
 
     sStep = STEP_DRAW;
     Backend_DrawStart();
-    Ppu_DrawFrame(sFrame);
+#if SA3_3DS_WIDE
+    Ppu_DrawFrameSdl(sFrame);
+#else
+    Ppu_DrawFramePmd(sFrame);
+#endif
     REG_VCOUNT = DISPLAY_HEIGHT + 1; // in VBlank
     sStep = STEP_PRESENT;
     Backend_Present(sFrame, DISPLAY_WIDTH, DISPLAY_HEIGHT);

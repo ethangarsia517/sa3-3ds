@@ -15,7 +15,14 @@ replaces `sdl2.c` with:
   line by line, running HBlank/VCount interrupts between lines; show it; the
   VBlank interrupt), the BIOS functions (`sdl2.c`'s), the sound hand-off
   (float to 16-bit) and the save image.
-- `port/core/ppu.c`: `sdl2.c`'s renderer.
+- `port/core/pmd/`: pmd-red-3ds's renderer and background cache (its
+  `ppu.c`, `bgcache.c`), nearly unchanged; `pmd/port.h` maps its names for
+  the GBA's memory to sa3's arrays. `port/core/ppu_frame.c` draws a frame
+  with it, the HBlank/VCount interrupts between lines. `make test` checks it
+  against pmd-red-3ds's reference renderer, pixel for pixel, on random
+  screens (`tools/test/test_renderer.c`).
+- `port/core/ppu_sdl.c`: `sdl2.c`'s renderer, still used by `WIDE=1` builds
+  (pmd-red-3ds's draws 240-pixel lines only).
 - `port/3ds/main.c`: the libctru backend (screen, DSP sound, buttons, SD card).
 
 The patch also:
@@ -51,11 +58,12 @@ Not checked: the final devkitARM link, 3dsxtool, and anything at run time.
 1. **Boot** (this): runs at 240x160 on the top screen, with sound, via the
    CPU-copied picture. First test on hardware: does it boot, how fast is it
    (`debug.txt` → `port.log`: game/draw ms per frame) on Old and New 3DS.
-2. **Speed**, renderer first, guided by `port.log`:
-   - draw backgrounds a tile at a time instead of a pixel at a time;
-   - list each line's sprites once per frame instead of checking all 128 on
-     every line; a fast path for unrotated sprites;
-   - skip layer clears and window/blend work when they're off;
+2. **Speed**, guided by `port.log`. First Old 3DS run (`sdl2.c`'s
+   renderer): game 4-6 ms a frame, drawing 50-100 ms, the 1.5x copy 9.6 ms;
+   10-18 fps.
+   - pmd-red-3ds's renderer (done: decoded-tile caches, whole tile rows,
+     fast paths; also draws rotated backgrounds' mode 2, brighten/darken,
+     the object window and mosaic properly);
    - present on the GPU (citro3d) with scaling, as pmd-red-3ds does, instead
      of the CPU copy;
    - the sound mixer on the second core (Old 3DS: the system core).
@@ -66,9 +74,12 @@ Not checked: the final devkitARM link, 3dsxtool, and anything at run time.
 4. **Widescreen** (`WIDE=1`): 400x240 1:1 on the top screen, on New 3DS.
 5. **Extras**: the bottom screen, options, a ROM-based builder.
 
-## Renderer notes (from reading `sdl2.c`)
+## Renderer notes
 
-- Video modes 2-5 aren't drawn (logged once); nor 2-D sprite tile mapping.
-- Mosaic on rotated backgrounds is approximate.
-- Fixed here: object-window sprites now mask every sprite, not only those
-  drawn after them in OAM order.
+pmd-red-3ds's renderer draws modes 0-3 (not 4/5: neither game uses them),
+both sprite tile mappings, windows and the object window, blending,
+brighten/darken and mosaic. It reads the sprite list once a frame (OAM is
+written in VBlank).
+
+`sdl2.c`'s (WIDE=1 only now): modes 2-5 and 2-D sprite tile mapping aren't
+drawn; mosaic on rotated backgrounds is approximate.

@@ -376,6 +376,16 @@ void Backend_Log(const char *fmt, ...)
 // quit, since HOME can't work while the main thread is stuck.
 
 static volatile int sWatchdogRun = 1;
+static volatile int sSuspended; // in the Home Menu or asleep: no frames, and that's fine
+static aptHookCookie sAptHook;
+
+static void OnApt(APT_HookType hook, void *param)
+{
+    if (hook == APTHOOK_ONSUSPEND || hook == APTHOOK_ONSLEEP)
+        sSuspended = 1;
+    else if (hook == APTHOOK_ONRESTORE || hook == APTHOOK_ONWAKEUP)
+        sSuspended = 0;
+}
 
 static void Watchdog(void *arg)
 {
@@ -386,7 +396,7 @@ static void Watchdog(void *arg)
         svcSleepThread(250 * 1000 * 1000LL); // 0.25 s
         u32 frame = Port_FrameCount();
         u64 now = svcGetSystemTick();
-        if (frame != lastFrame) {
+        if (frame != lastFrame || sSuspended) {
             lastFrame = frame;
             lastChange = now;
             reported = 0;
@@ -456,6 +466,7 @@ int main(void)
     }
 
     LightLock_Init(&sLogLock);
+    aptHook(&sAptHook, OnApt, NULL);
     s32 prio = 0x30;
     svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
     if (!threadCreate(Watchdog, NULL, 16 * 1024, prio - 1, -2, true))
