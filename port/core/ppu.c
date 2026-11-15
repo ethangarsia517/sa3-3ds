@@ -6,7 +6,9 @@
 // - Ppu_DrawFrame draws straight into the caller's buffer (no extra copy);
 // - object-window sprites are done before the others, so every sprite is
 //   masked by them, whatever its OAM index;
-// - unsupported-mode messages are logged once, not every line.
+// - unsupported-mode messages are logged once, not every line;
+// - its `char`s are `signed char`: they count down to -1, and `char` is
+//   unsigned on ARM (an endless loop on the first scanline otherwise).
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -32,9 +34,9 @@ struct scanlineData {
     uint16_t bgcnts[4];
     uint16_t winMask[DISPLAY_WIDTH];
     // priority bookkeeping
-    char bgtoprio[4]; // background to priority
-    char prioritySortedBgs[4][4];
-    char prioritySortedBgsCount[4];
+    signed char bgtoprio[4]; // background to priority
+    signed char prioritySortedBgs[4][4];
+    signed char prioritySortedBgsCount[4];
 };
 
 static bool sWarned2dMapping, sWarnedMode;
@@ -405,7 +407,7 @@ static uint16_t alphaBrightnessDecrease(uint16_t targetA)
 
 // outputs the blended pixel in colorOutput, the prxxx are the bg priority and
 // subpriority, pixelpos is pixel offset in scanline
-static bool alphaBlendSelectTargetB(struct scanlineData *scanline, uint16_t *colorOutput, char prnum, char prsub, int pixelpos,
+static bool alphaBlendSelectTargetB(struct scanlineData *scanline, uint16_t *colorOutput, signed char prnum, signed char prsub, int pixelpos,
                                     bool spriteBlendEnabled)
 {
     // iterate trough every possible bg to blend with, starting from specified priorities
@@ -418,7 +420,7 @@ static bool alphaBlendSelectTargetB(struct scanlineData *scanline, uint16_t *col
         }
 
         for (unsigned int blndprsub = prsub; blndprsub < scanline->prioritySortedBgsCount[blndprnum]; blndprsub++) {
-            char currLayer = scanline->prioritySortedBgs[blndprnum][blndprsub];
+            signed char currLayer = scanline->prioritySortedBgs[blndprnum][blndprsub];
             if (getAlphaBit(scanline->layers[currLayer][pixelpos]) == 1 && REG_BLDCNT & (1 << (8 + currLayer)) && isbgEnabled(currLayer)) {
                 *colorOutput = scanline->layers[currLayer][pixelpos];
                 return true;
@@ -684,7 +686,7 @@ static void DrawScanline(uint16_t *pixels, uint16_t vcount)
         scanline.bgcnts[bgnum] = bgcnt;
         scanline.bgtoprio[bgnum] = priority = (bgcnt & 3);
 
-        char priorityCount = scanline.prioritySortedBgsCount[priority];
+        signed char priorityCount = scanline.prioritySortedBgsCount[priority];
         scanline.prioritySortedBgs[priority][priorityCount] = bgnum;
         scanline.prioritySortedBgsCount[priority]++;
     }
@@ -795,8 +797,8 @@ static void DrawScanline(uint16_t *pixels, uint16_t vcount)
 
     // iterate trough every priority in order
     for (prnum = 3; prnum >= 0; prnum--) {
-        for (char prsub = scanline.prioritySortedBgsCount[prnum] - 1; prsub >= 0; prsub--) {
-            char bgnum = scanline.prioritySortedBgs[prnum][prsub];
+        for (signed char prsub = scanline.prioritySortedBgsCount[prnum] - 1; prsub >= 0; prsub--) {
+            signed char bgnum = scanline.prioritySortedBgs[prnum][prsub];
             // if background is enabled then draw it
             if (isbgEnabled(bgnum)) {
                 uint16_t *src = scanline.layers[bgnum];
@@ -822,7 +824,7 @@ static void DrawScanline(uint16_t *pixels, uint16_t vcount)
 
                         switch (blendMode) {
                             case 1: {
-                                char isSpriteBlendingEnabled = REG_BLDCNT & BLDCNT_TGT2_OBJ ? 1 : 0;
+                                signed char isSpriteBlendingEnabled = REG_BLDCNT & BLDCNT_TGT2_OBJ ? 1 : 0;
                                 // find targetB and blend it
                                 if (alphaBlendSelectTargetB(&scanline, &targetB, prnum, prsub + 1, xpos, isSpriteBlendingEnabled)) {
                                     color = alphaBlendColor(targetA, targetB);

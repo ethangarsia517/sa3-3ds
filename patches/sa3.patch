@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 3e3935a..822165f 100644
+index 3e3935a..805b995 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -42,6 +42,10 @@ ifeq ($(PLATFORM),gba)
@@ -34,7 +34,7 @@ index 3e3935a..822165f 100644
  else
  C_SRCS := $(shell find $(C_SUBDIR) -name "*.c")
  endif
-@@ -229,6 +240,15 @@ else
+@@ -229,6 +240,16 @@ else
  		CPPFLAGS += -D TITLE_BAR=$(BUILD_NAME).$(PLATFORM) -D PLATFORM_GBA=0 -D PLATFORM_SDL=1 -D PLATFORM_WIN32=0 $(SDL_MINGW_FLAGS)
  	else ifeq ($(PLATFORM),win32)
  		CPPFLAGS += -D TITLE_BAR=$(BUILD_NAME).$(PLATFORM) -D PLATFORM_GBA=0 -D PLATFORM_SDL=0 -D PLATFORM_WIN32=1
@@ -44,13 +44,14 @@ index 3e3935a..822165f 100644
 +		CPPFLAGS += -D PLATFORM_GBA=0 -D PLATFORM_SDL=0 -D PLATFORM_WIN32=0 -D PLATFORM_3DS=1 -D SA3_3DS_WIDE=$(WIDE)
 +		# ARM11 (ARMv6K, hard float, libctru's soft thread pointer). Decompiled code
 +		# relies on GBA-era compiler leniency: no strict aliasing, wrapping overflow.
++		# The portable code was tested on x86, where char is signed (on ARM it's not).
 +		CC1FLAGS += -marm -march=armv6k+fp -mtune=mpcore -mfloat-abi=hard -mtp=soft \
-+		            -ffunction-sections -fdata-sections -fno-strict-aliasing -fwrapv -fno-common \
++		            -ffunction-sections -fdata-sections -fno-strict-aliasing -fwrapv -fno-common -fsigned-char \
 +		            -Wno-parentheses -Wno-unused-value
  	endif
  
  	ifeq ($(CPU_ARCH),i386)
-@@ -245,6 +265,10 @@ ifeq ($(PLATFORM),gba)
+@@ -245,6 +266,10 @@ ifeq ($(PLATFORM),gba)
    ASFLAGS  += -mcpu=arm7tdmi -mthumb-interwork
    CC1FLAGS += -mthumb-interwork
  else
@@ -61,7 +62,7 @@ index 3e3935a..822165f 100644
    ifeq ($(PLATFORM), sdl)
      # for modern we are using a modern compiler
      # so instead of CPP we can use gcc -E to "preprocess only"
-@@ -318,6 +342,9 @@ endif
+@@ -318,6 +343,9 @@ endif
  # these commands will run regardless of deps being completed
  .PHONY: clean tools tidy clean-tools $(TOOLDIRS) libagbsyscall
  
@@ -71,7 +72,7 @@ index 3e3935a..822165f 100644
  # Ensure required directories exist
  $(shell mkdir -p $(C_BUILDDIR) $(ASM_BUILDDIR) $(DATA_ASM_BUILDDIR) $(SOUND_ASM_BUILDDIR) $(SONG_BUILDDIR) $(MID_BUILDDIR))
  
-@@ -410,6 +437,8 @@ sdl_win32:
+@@ -410,6 +438,8 @@ sdl_win32:
  
  win32: ; @$(MAKE) PLATFORM=win32 CPU_ARCH=i386
  
@@ -80,7 +81,7 @@ index 3e3935a..822165f 100644
  #### RECIPES ####
  
  include songs.mk
-@@ -458,6 +487,9 @@ ifeq ($(PLATFORM),gba)
+@@ -458,6 +488,9 @@ ifeq ($(PLATFORM),gba)
  	@echo "$(LD) -T $(LDSCRIPT) $(MAP_FLAG) $(MAP) <objects> <lib> -o $@"
  	@$(CPP) -P $(CPPFLAGS) $(LDSCRIPT) > $(OBJ_DIR)/$(LDSCRIPT)
  	@cd $(OBJ_DIR) && $(LD) -T $(LDSCRIPT) $(MAP_FLAG) $(ROOT_DIR)/$(MAP) $(OBJS_REL) $(LIBS) -o $(ROOT_DIR)/$@
@@ -90,7 +91,7 @@ index 3e3935a..822165f 100644
  else
  	@echo "$(CC1) $(MAP_FLAG)$(MAP) <objects> <lib> -o $@"
  	@touch $(ROOT_DIR)/$(MAP)
-@@ -470,6 +502,8 @@ ifeq ($(PLATFORM),gba)
+@@ -470,6 +503,8 @@ ifeq ($(PLATFORM),gba)
  	$(FIX) $@ -p -t"$(TITLE)" -c$(GAME_CODE) -m$(MAKER_CODE) -r$(GAME_REVISION) --silent
  else ifeq ($(PLATFORM),sdl)
  	cp $< $@
@@ -99,7 +100,7 @@ index 3e3935a..822165f 100644
  else
  	$(OBJCOPY) -O pei-x86-64 $< $@
  endif
-@@ -502,6 +536,10 @@ $(ASM_BUILDDIR)/%.o: $(ASM_SUBDIR)/%.s $$(asm_dep)
+@@ -502,6 +537,10 @@ $(ASM_BUILDDIR)/%.o: $(ASM_SUBDIR)/%.s $$(asm_dep)
  $(DATA_ASM_BUILDDIR)/%.o: $(DATA_ASM_SUBDIR)/%.s
  	@echo "$(AS) <flags> -o $@ $<"
  	@$(PREPROC) $< $(PLATFORM) "" | $(CPP) $(CPPFLAGS) - | $(AS) $(ASFLAGS) -o $@ -
@@ -110,7 +111,7 @@ index 3e3935a..822165f 100644
  
  # Scan the ASM data dependencies to determine if any .inc files have changed
  $(DATA_ASM_BUILDDIR)/%.d: $(DATA_ASM_SUBDIR)/%.s
-@@ -514,7 +552,13 @@ endif
+@@ -514,7 +553,13 @@ endif
  
  $(SONG_BUILDDIR)/%.o: $(SONG_SUBDIR)/%.s
  	@echo "$(AS) <flags> -o $@ $<"
