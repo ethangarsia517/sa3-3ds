@@ -64,6 +64,11 @@ Not checked: the final devkitARM link, 3dsxtool, and anything at run time.
    - pmd-red-3ds's renderer (done: decoded-tile caches, whole tile rows,
      fast paths; also draws rotated backgrounds' mode 2, brighten/darken,
      the object window and mosaic properly);
+   - second Old 3DS run (pmd-red-3ds's renderer): drawing 20-38 ms;
+     18-34 fps;
+   - automatic frame skip (done): the game at full speed, fewer frames drawn;
+   - present on the GPU (done: pmd-red-3ds's, the 1.5x scaling bilinear);
+   - the drawing profile in port.log (done) to choose what to speed up next;
    - present on the GPU (citro3d) with scaling, as pmd-red-3ds does, instead
      of the CPU copy;
    - the sound mixer on the second core (Old 3DS: the system core).

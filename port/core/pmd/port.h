@@ -33,4 +33,9 @@ void Ppu_SetLineRegs(const uint8_t *regs);
 int Ppu_ListLine(int line);
 int Ppu_ListObjects(int lines);
 
+// sa3-3ds's profile (pmd_glue.c): when gPpuTicks is set, Ppu_RenderLine adds
+// its time in the backgrounds, the sprites and compositing to gPpuProf[0-2].
+extern uint64_t (*gPpuTicks)(void);
+extern uint64_t gPpuProf[3];
+
 #endif

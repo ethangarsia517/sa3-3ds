@@ -61,7 +61,7 @@ APP_AUTHOR := SAT-R / sa3-3ds
 3DS_OBJ := $(BUILD)/3ds
 3DS_ELF := $(BUILD)/sa3-3ds.elf
 
-$(3DS_OBJ)/main.o: port/3ds/main.c port/core/port.h
+$(3DS_OBJ)/main.o: port/3ds/main.c port/3ds/present_shbin.h port/core/port.h
 	@mkdir -p $(dir $@)
 	@$(CC_3DS) -O2 -g -Wall $(ARCH_3DS) -D__3DS__ -I$(CTRU)/include -c $< -o $@
 	@echo "  CC   $<"
@@ -72,7 +72,7 @@ $(PRELINK):
 
 $(3DS_ELF): $(3DS_OBJ)/main.o $(PRELINK)
 	@$(CC_3DS) -specs=3dsx.specs -g $(ARCH_3DS) -Wl,-Map,$(BUILD)/sa3-3ds.map -Wl,--no-warn-rwx-segments \
-		-o $@ $(3DS_OBJ)/main.o $(PRELINK) -L$(CTRU)/lib -lctru -lm
+		-o $@ $(3DS_OBJ)/main.o $(PRELINK) -L$(CTRU)/lib -lcitro3d -lctru -lm
 	@echo "  LD   $@"
 
 $(BUILD)/sa3-3ds.smdh: port/3ds/icon.png

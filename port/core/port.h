@@ -51,12 +51,25 @@ void Port_Describe(char *buf, int size);
 // Ppu_DrawFrameSdl: sa3's own (ppu_sdl.c), any size.
 void Ppu_DrawFramePmd(uint16_t *out);
 void Ppu_DrawFrameSdl(uint16_t *out);
+// A frame not drawn (frame skip): the same line-by-line interrupts and HBlank
+// DMAs, so the game's mid-frame effects run as always, but no pixels.
+void Ppu_RunFrameUndrawn(void);
+
+// --- Profiling (only while switched on: it costs a little) ----------------------
+// Where drawing time goes, summed since the last Port_TakeProfile: the parts
+// below, in ticks of the function given.
+enum { PROF_BG, PROF_OBJ, PROF_COMPOSE, PROF_PREPARE, PROF_LINES_OTHER, PROF_COUNT };
+void Port_SetProfiling(uint64_t (*ticks)(void)); // NULL: off
+void Port_TakeProfile(uint64_t out[PROF_COUNT]);
 
 // --- Backend (implemented once per platform) ------------------------------------
 
 // The frame's drawing starts now (the performance meter: game logic until
 // here, drawing from here to Backend_Present).
 void Backend_DrawStart(void);
+// Whether to draw this frame (frame skip): asked before each frame; when
+// not, Backend_DrawStart and Backend_Present are not called for it.
+bool Backend_ShouldDraw(void);
 // The finished picture: width x height GBA colours (BGR555).
 void Backend_Present(const uint16_t *frame, int width, int height);
 uint16_t Backend_PollKeys(void); // PORT_KEY_* bits, active high
@@ -73,6 +86,6 @@ void Backend_Fatal(const char *msg) __attribute__((noreturn));
 
 // Renamed whenever the backend and the core must change together: linking an
 // old port/3ds/main.c with a newer sa3-game.o fails naming this symbol.
-extern const int Backend_Version1_UpdateRepoIfMissing;
+extern const int Backend_Version2_UpdateRepoIfMissing;
 
 #endif

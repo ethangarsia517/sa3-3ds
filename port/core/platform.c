@@ -26,7 +26,7 @@ extern uint8_t FLASH_BASE[FLASH_ROM_SIZE_1M * SECTORS_PER_BANK];
 extern void AgbMain(void);
 
 // (a backend from another version of the repo fails to link: see port.h)
-__attribute__((used)) static const int *const sBackendVersion = &Backend_Version1_UpdateRepoIfMissing;
+__attribute__((used)) static const int *const sBackendVersion = &Backend_Version2_UpdateRepoIfMissing;
 
 static uint16_t sFrame[DISPLAY_WIDTH * DISPLAY_HEIGHT] __attribute__((aligned(64)));
 static uint32_t sFrameCount;
@@ -139,15 +139,20 @@ void VBlankIntrWait(void)
     REG_KEYINPUT = KEYS_MASK ^ Backend_PollKeys();
 
     sStep = STEP_DRAW;
-    Backend_DrawStart();
+    if (Backend_ShouldDraw()) {
+        Backend_DrawStart();
 #if SA3_3DS_WIDE
-    Ppu_DrawFrameSdl(sFrame);
+        Ppu_DrawFrameSdl(sFrame);
 #else
-    Ppu_DrawFramePmd(sFrame);
+        Ppu_DrawFramePmd(sFrame);
 #endif
-    REG_VCOUNT = DISPLAY_HEIGHT + 1; // in VBlank
-    sStep = STEP_PRESENT;
-    Backend_Present(sFrame, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        REG_VCOUNT = DISPLAY_HEIGHT + 1; // in VBlank
+        sStep = STEP_PRESENT;
+        Backend_Present(sFrame, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    } else {
+        Ppu_RunFrameUndrawn();
+        REG_VCOUNT = DISPLAY_HEIGHT + 1;
+    }
 
     sStep = STEP_VBLANK_INTR;
     REG_DISPSTAT |= INTR_FLAG_VBLANK;

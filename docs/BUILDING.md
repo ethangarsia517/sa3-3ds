@@ -54,13 +54,25 @@ between the two needs `make clean` first.
   Homebrew Launcher. Sound needs `SD:/3ds/dspfirm.cdc`.
 
 Controls are the GBA's: A (or X) jump, B, L, R (or ZL/ZR), START, SELECT, D-pad
-or Circle Pad. **Y** switches the picture between 1:1 and 1.5x. **HOME** to
-quit.
+or Circle Pad. **Y** switches the picture between 1:1 and 1.5x. **Touching the
+bottom screen** switches frame skip on or off (on at first). **HOME** to quit.
 
-The bottom screen shows the frame rate. For a log, create an empty
-`SD:/3ds/sa3-3ds/debug.txt`: the port then writes `port.log` next to it, with
-a line every 5 seconds giving the milliseconds per frame spent on game logic,
-drawing, copying to the screen and waiting. (Full speed is 16.7 ms in all.)
+**Frame skip:** the game itself always runs 60 frames a second, so it plays and
+sounds at full speed; when there isn't time to draw a frame, it isn't drawn
+(at most 3 in a row). The bottom screen shows both rates: Speed (the game's)
+and Drawn.
+
+**Video:** the GPU puts the picture on the screen and scales it. To have the
+CPU copy it instead (as the first builds did), create an empty
+`SD:/3ds/sa3-3ds/cpu-video.txt`.
+
+For a log, create an empty `SD:/3ds/sa3-3ds/debug.txt`: the port then writes
+`port.log` next to it, every 5 seconds two lines: the game's and the drawn
+frame rates, the milliseconds of game logic and waiting per frame, of drawing
+and presenting per drawn frame; then where the drawing time went
+(backgrounds, sprites, compositing, the frame's setup, the game's HBlank
+interrupts). Full speed is 16.7 ms a frame in all. (The profile costs a
+little time itself, so frame rates are a bit lower with `debug.txt`.)
 
 **Saves:** not yet. sa3's portable build doesn't save yet (it reports no
 flash chip, as its SDL build does). The port loads and writes

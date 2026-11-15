@@ -1,5 +1,6 @@
 // sa3-3ds: pmd-red-3ds's renderer (port/core/ppu.c at commit 9a79b39), unchanged
-// but for the #undef before `#define gPortRegs sRegs`. Its wide view, HUD row
+// but for the #undef before `#define gPortRegs sRegs` and the profile's timing
+// in Ppu_RenderLine (gPpuTicks, gPpuProf: off unless set). Its wide view, HUD row
 // and drawing list are never switched on here. Copy changes over from
 // pmd-red-3ds as they come.
 
@@ -1316,6 +1317,8 @@ void Ppu_RenderLine(int line, uint16_t *dst)
     for (int i = 0; i < 2; i++)
         AffineReloadIfWritten(i);
 
+    uint64_t (*ticks)(void) = gPpuTicks; // (sa3-3ds: the profile)
+    uint64_t t0 = ticks ? ticks() : 0;
     int bgOn[4] = { 0, 0, 0, 0 };
     switch (mode) {
     case 0:
@@ -1356,14 +1359,22 @@ void Ppu_RenderLine(int line, uint16_t *dst)
         break; // modes 4/5 are not used by pmd-red
     }
 
+    uint64_t t1 = ticks ? ticks() : 0;
     RenderObjects(line, dispcnt);
     sObjDirtyMin = sObjMinX;
     sObjDirtyMax = sObjMaxX;
+    uint64_t t2 = ticks ? ticks() : 0;
 
     int bgPrio[4];
     for (int b = 0; b < 4; b++)
         bgPrio[b] = R16(0x08 + b * 2) & 3;
     Compose(line, dst, bgOn, bgPrio, dispcnt);
+    if (ticks) {
+        uint64_t t3 = ticks();
+        gPpuProf[0] += t1 - t0;
+        gPpuProf[1] += t2 - t1;
+        gPpuProf[2] += t3 - t2;
+    }
 
     for (int i = 0; i < 2; i++)
         AffineAdvance(i);

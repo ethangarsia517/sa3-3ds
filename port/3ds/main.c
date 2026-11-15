@@ -14,6 +14,7 @@
 // needs to boot.
 
 #include <3ds.h>
+#include <citro3d.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,8 +27,9 @@
 #define SAVE_TMP_PATH DATA_DIR "/sa3.sav.tmp"
 #define LOG_PATH DATA_DIR "/port.log"
 #define DEBUG_FLAG DATA_DIR "/debug.txt"
+#define CPU_VIDEO_FLAG DATA_DIR "/cpu-video.txt" // the picture copied by the CPU, not the GPU
 
-const int Backend_Version1_UpdateRepoIfMissing = 1;
+const int Backend_Version2_UpdateRepoIfMissing = 1;
 
 // The main thread's stack (libctru's default is 32 KiB; PC builds have MBs).
 u32 __stacksize__ = 1024 * 1024;
@@ -36,6 +38,8 @@ static PrintConsole sConsole;
 static FILE *sLog;
 static int sAudioOn;
 static int sScaled = 1; // 1.5x (Y switches to 1:1)
+static int sSkipOn = 1; // frame skip (touching the bottom screen switches it)
+static bool sGpu;       // the GPU puts the picture on the screen (else the CPU copies it)
 
 // --- Timing / performance meter ---------------------------------------------
 
@@ -47,9 +51,10 @@ static int sLate;
 enum { T_GAME, T_DRAW, T_PRESENT, T_WAIT, T_COUNT };
 static u64 sPartTicks[T_COUNT];
 static u64 sMarkTick;
-static u32 sMeterFrames, sMeterLate;
+static u32 sMeterFrames, sMeterLate, sMeterDrawn;
 static u64 sMeterStart;
-static float sFps;
+static float sFps, sDrawnFps;
+static u64 sProfTotal[PROF_COUNT];
 
 static void Part(int part)
 {
@@ -75,14 +80,28 @@ static void MeterEndFrame(void)
     if (now - sMeterStart < SYSCLOCK_ARM11) // once a second
         return;
     sFps = (float)sMeterFrames * (float)SYSCLOCK_ARM11 / (float)(now - sMeterStart);
+    sDrawnFps = (float)sMeterDrawn * (float)SYSCLOCK_ARM11 / (float)(now - sMeterStart);
     PrintStatus();
-    if (sLog != NULL && Port_FrameCount() % 300 < 60)
-        Backend_Log("frame %lu: %.1f fps, ms/frame game %.2f draw %.2f present %.2f wait %.2f, late %lu",
-                    (unsigned long)Port_FrameCount(), (double)sFps, (double)TicksToMs(sPartTicks[T_GAME], sMeterFrames),
-                    (double)TicksToMs(sPartTicks[T_DRAW], sMeterFrames), (double)TicksToMs(sPartTicks[T_PRESENT], sMeterFrames),
-                    (double)TicksToMs(sPartTicks[T_WAIT], sMeterFrames), (unsigned long)sMeterLate);
+    if (sLog != NULL && Port_FrameCount() % 300 < 60) {
+        // game and wait: per frame; draw and present: per drawn frame
+        Backend_Log("frame %lu: %.1f fps (drawn %.1f), ms game %.2f wait %.2f, per drawn frame draw %.2f present %.2f, late %lu",
+                    (unsigned long)Port_FrameCount(), (double)sFps, (double)sDrawnFps,
+                    (double)TicksToMs(sPartTicks[T_GAME], sMeterFrames), (double)TicksToMs(sPartTicks[T_WAIT], sMeterFrames),
+                    (double)TicksToMs(sPartTicks[T_DRAW], sMeterDrawn), (double)TicksToMs(sPartTicks[T_PRESENT], sMeterDrawn),
+                    (unsigned long)sMeterLate);
+        uint64_t prof[PROF_COUNT];
+        Port_TakeProfile(prof);
+        Backend_Log("  drawing, ms per drawn frame: backgrounds %.2f sprites %.2f compose %.2f prepare %.2f interrupts %.2f",
+                    (double)TicksToMs(prof[PROF_BG], sMeterDrawn), (double)TicksToMs(prof[PROF_OBJ], sMeterDrawn),
+                    (double)TicksToMs(prof[PROF_COMPOSE], sMeterDrawn), (double)TicksToMs(prof[PROF_PREPARE], sMeterDrawn),
+                    (double)TicksToMs(prof[PROF_LINES_OTHER], sMeterDrawn));
+    } else if (sLog != NULL) {
+        uint64_t prof[PROF_COUNT];
+        Port_TakeProfile(prof); // (only the logged second's)
+    }
+    (void)sProfTotal;
     memset(sPartTicks, 0, sizeof(sPartTicks));
-    sMeterFrames = sMeterLate = 0;
+    sMeterFrames = sMeterLate = sMeterDrawn = 0;
     sMeterStart = now;
 }
 
@@ -100,6 +119,163 @@ static void WaitForFrame(void)
     }
     gspWaitForVBlank();
     sDeadline = svcGetSystemTick() + FRAME_TICKS;
+}
+
+// --- Frame skip -----------------------------------------------------------------------
+//
+// The game always runs every frame (so it plays and sounds at full speed);
+// drawing a frame is left out when there isn't time for it before the
+// frame's deadline: the time drawing has been taking (an average), from now.
+// Never more than MAX_SKIP frames in a row (15 drawn a second at worst).
+
+#define MAX_SKIP 3
+static u64 sDrawCost = FRAME_TICKS / 2; // ticks: drawing and presenting a frame (average)
+static u64 sDrawStartTick;
+static int sSkipRun;
+
+bool Backend_ShouldDraw(void)
+{
+    u64 now = svcGetSystemTick();
+    bool skip = sSkipOn && sDeadline != 0 && now + sDrawCost > sDeadline && sSkipRun < MAX_SKIP;
+    sSkipRun = skip ? sSkipRun + 1 : 0;
+    return !skip;
+}
+
+// --- Video (GPU) ------------------------------------------------------------------------
+//
+// From pmd-red-3ds (port/3ds/main.c, "GPU"): the CPU converts the picture to
+// the 3DS's colours (RGB565) into a plain buffer, which the GPU's transfer
+// engine copies into a texture (in the GPU's tiled layout); a rectangle with
+// that texture is then drawn on the top screen, scaled by the GPU (bilinear).
+// With sdmc:/3ds/sa3-3ds/cpu-video.txt (or if citro3d won't start), the CPU
+// copies the picture to the screen instead, as before.
+
+#include "present_shbin.h"
+
+#define TEX_W 512 // the texture: wide and high enough for 400x240
+#define TEX_H 256
+#define TEX_TRANSFER_FLAGS                                                                  \
+    (GX_TRANSFER_FLIP_VERT(1) | GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_RAW_COPY(0) |        \
+     GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | \
+     GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
+#define SCREEN_TRANSFER_FLAGS                                                               \
+    (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |        \
+     GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | \
+     GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
+
+static C3D_RenderTarget *sTargetTop;
+static C3D_Mtx sProjTop;
+static DVLB_s *sShaderDvlb;
+static shaderProgram_s sShader;
+static int sProjLoc;
+static C3D_Tex sTex;
+static uint16_t *sStage; // the converted picture, TEX_W pixels a row (linear memory)
+static void *sCopiedTo;  // the top screen's buffer the last copy went into (GpuWaitForSwap)
+
+static void GpuInit(void)
+{
+    FILE *flag = fopen(CPU_VIDEO_FLAG, "r");
+    if (flag != NULL) {
+        fclose(flag);
+        Backend_Log("video: CPU (cpu-video.txt)");
+        return;
+    }
+    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) {
+        Backend_Log("video: CPU (citro3d did not start)");
+        return;
+    }
+    sTargetTop = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
+    sShaderDvlb = DVLB_ParseFile(sPresentShader, PRESENT_SHADER_SIZE);
+    sStage = linearAlloc(TEX_W * TEX_H * 2);
+    if (sTargetTop == NULL || sShaderDvlb == NULL || sStage == NULL || !C3D_TexInitVRAM(&sTex, TEX_W, TEX_H, GPU_RGB565)) {
+        Backend_Log("video: CPU (GPU setup failed)");
+        C3D_Fini();
+        return;
+    }
+    memset(sStage, 0, TEX_W * TEX_H * 2);
+    C3D_TexSetFilter(&sTex, GPU_LINEAR, GPU_LINEAR); // (bilinear when scaled; 1:1, each pixel as it is)
+    C3D_TexSetWrap(&sTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    C3D_RenderTargetSetOutput(sTargetTop, GFX_TOP, GFX_LEFT, SCREEN_TRANSFER_FLAGS);
+
+    shaderProgramInit(&sShader);
+    shaderProgramSetVsh(&sShader, &sShaderDvlb->DVLE[0]);
+    C3D_BindProgram(&sShader);
+    sProjLoc = shaderInstanceGetUniformLocation(sShader.vertexShader, "projection");
+    C3D_AttrInfo *attr = C3D_GetAttrInfo();
+    AttrInfo_Init(attr);
+    AttrInfo_AddLoader(attr, 0, GPU_FLOAT, 3); // v0: position
+    AttrInfo_AddLoader(attr, 1, GPU_FLOAT, 2); // v1: texture coordinates
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    C3D_CullFace(GPU_CULL_NONE);
+    C3D_TexEnv *env = C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_TEXTURE0, GPU_TEXTURE0);
+    C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+    // Screen pixels, y downwards (the 3DS's screens are turned sideways)
+    Mtx_OrthoTilt(&sProjTop, 0.0f, 400.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
+    sGpu = true;
+    Backend_Log("video: GPU");
+}
+
+// GBA BGR555 to RGB565, two pixels at a time (as ToRgb565)
+static void GpuConvert(const uint16_t *src, int w, int h)
+{
+    for (int y = 0; y < h; y++) {
+        const uint32_t *s = (const uint32_t *)(src + y * w);
+        uint32_t *d = (uint32_t *)(sStage + y * TEX_W);
+        for (int x = 0; x < w / 2; x++) {
+            uint32_t c = s[x];
+            d[x] = ((c & 0x001F001F) << 11) | ((c & 0x03E003E0) << 1) | ((c >> 4) & 0x00200020) | ((c >> 10) & 0x001F001F);
+        }
+    }
+}
+
+// The screen's swap (asked for when the GPU finished copying the picture to
+// the framebuffer) happens at its next VBlank; until then it still shows the
+// other buffer, the one the next copy goes into: wait for that swap first,
+// or the screen tears (pmd-red-3ds, GpuWaitForSwap).
+static void GpuWaitForSwap(void)
+{
+    if (sCopiedTo == NULL)
+        return;
+    u64 giveUp = svcGetSystemTick() + SYSCLOCK_ARM11 / 30;
+    while (gspIsPresentPending(GFX_TOP) && svcGetSystemTick() < giveUp)
+        gspWaitForAnyEvent();
+    sCopiedTo = NULL;
+}
+
+static void GpuPresent(const uint16_t *frame, int w, int h, int x, int y, int outW, int outH)
+{
+    GpuConvert(frame, w, h);
+    if (R_FAILED(svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)sStage, TEX_W * h * 2)))
+        GSPGPU_FlushDataCache(sStage, TEX_W * h * 2);
+
+    C3D_FrameBegin(0); // (waits for the last frame's copies)
+    // The copy into the texture: in the frame's queue, before its drawing
+    C3D_SyncDisplayTransfer((u32 *)sStage, GX_BUFFER_DIM(TEX_W, TEX_H), (u32 *)sTex.data, GX_BUFFER_DIM(TEX_W, TEX_H),
+                            TEX_TRANSFER_FLAGS);
+    GpuWaitForSwap();
+
+    // The picture's first row is at v = 0, its last at v = h / TEX_H
+    float x0 = (float)x, y0 = (float)y, x1 = (float)(x + outW), y1 = (float)(y + outH);
+    float u0 = 0.0f, u1 = (float)w / TEX_W, v0 = 0.0f, v1 = (float)h / TEX_H;
+    if (outW != w || outH != h) {
+        // Scaled (bilinear): the edges' pixels at the edges' texel centres
+        u0 = 0.5f / TEX_W; u1 = (w - 0.5f) / TEX_W;
+        v0 = 0.5f / TEX_H; v1 = (h - 0.5f) / TEX_H;
+    }
+    C3D_RenderTargetClear(sTargetTop, C3D_CLEAR_ALL, 0x000000FF, 0); // black borders
+    C3D_FrameDrawOn(sTargetTop);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sProjLoc, &sProjTop);
+    C3D_TexBind(0, &sTex);
+    C3D_ImmDrawBegin(GPU_TRIANGLE_STRIP);
+    C3D_ImmSendAttrib(x0, y0, 0.5f, 0.0f); C3D_ImmSendAttrib(u0, v0, 0.0f, 0.0f);
+    C3D_ImmSendAttrib(x1, y0, 0.5f, 0.0f); C3D_ImmSendAttrib(u1, v0, 0.0f, 0.0f);
+    C3D_ImmSendAttrib(x0, y1, 0.5f, 0.0f); C3D_ImmSendAttrib(u0, v1, 0.0f, 0.0f);
+    C3D_ImmSendAttrib(x1, y1, 0.5f, 0.0f); C3D_ImmSendAttrib(u1, v1, 0.0f, 0.0f);
+    C3D_ImmDrawEnd();
+    sCopiedTo = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
+    C3D_FrameEnd(GX_CMDLIST_FLUSH); // (only the command list: the picture was flushed)
 }
 
 // --- Video (CPU copy) -----------------------------------------------------------
@@ -128,6 +304,8 @@ static void BuildScaleMaps(void)
 
 static void ClearTop(void)
 {
+    if (sGpu)
+        return; // (the GPU clears around the picture every frame)
     for (int i = 0; i < 2; i++) {
         memset(gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL), 0, TOP_W * TOP_H * 2);
         gfxScreenSwapBuffers(GFX_TOP, false);
@@ -137,12 +315,13 @@ static void ClearTop(void)
 void Backend_DrawStart(void)
 {
     Part(T_GAME);
+    sDrawStartTick = sMarkTick;
 }
 
 void Backend_Present(const uint16_t *frame, int width, int height)
 {
     Part(T_DRAW);
-    uint16_t *fb = (uint16_t *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
+    sMeterDrawn++;
     int scaled = sScaled && width * 3 / 2 <= TOP_W && height * 3 / 2 <= TOP_H;
     int outW = scaled ? width * 3 / 2 : width;
     int outH = scaled ? height * 3 / 2 : height;
@@ -153,6 +332,14 @@ void Backend_Present(const uint16_t *frame, int width, int height)
     int ox = (TOP_W - outW) / 2;
     int oy = (TOP_H - outH) / 2;
 
+    if (sGpu) {
+        GpuPresent(frame, width, height, ox, oy, outW, outH);
+        Part(T_PRESENT);
+        sDrawCost = (sDrawCost * 7 + (sMarkTick - sDrawStartTick)) / 8;
+        return;
+    }
+
+    uint16_t *fb = (uint16_t *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
     for (int x = 0; x < outW; x++) {
         int sx = scaled ? sScaleX[x] : x;
         // column x + ox, from screen row oy + outH - 1 (bottom) up to oy
@@ -166,7 +353,9 @@ void Backend_Present(const uint16_t *frame, int width, int height)
                 *col++ = ToRgb565(src[y * width]);
         }
     }
+    gfxScreenSwapBuffers(GFX_TOP, false); // (shown at the next VBlank)
     Part(T_PRESENT);
+    sDrawCost = (sDrawCost * 7 + (sMarkTick - sDrawStartTick)) / 8;
 }
 
 // --- Bottom screen: status text ---------------------------------------------------
@@ -178,9 +367,12 @@ static void PrintStatus(void)
     printf("sa3-3ds (early test build)\n\n");
     printf("Picture: %dx%d %s   \n", Port_DisplayWidth(), Port_DisplayHeight(),
            (sScaled && Port_DisplayWidth() * 3 / 2 <= TOP_W) ? "1.5x" : "1:1 ");
+    printf("Video  : %s\n", sGpu ? "GPU" : "CPU");
     printf("Y      : 1:1 / 1.5x\n");
+    printf("Touch  : frame skip %s  \n", sSkipOn ? "on " : "off");
     printf("HOME   : exit\n\n");
     printf("Speed  : %5.1f fps   \n", (double)sFps);
+    printf("Drawn  : %5.1f fps   \n", (double)sDrawnFps);
     if (!sAudioOn)
         printf("\n\x1b[33mNo sound: sdmc:/3ds/dspfirm.cdc missing.\x1b[0m\n");
     if (sLog != NULL)
@@ -196,6 +388,10 @@ uint16_t Backend_PollKeys(void)
     if (down & KEY_Y) {
         sScaled = !sScaled;
         ClearTop();
+        PrintStatus();
+    }
+    if (down & KEY_TOUCH) {
+        sSkipOn = !sSkipOn;
         PrintStatus();
     }
     u32 h = hidKeysHeld();
@@ -330,6 +526,8 @@ static void Shutdown(void)
         ndspExit();
         linearFree(sWaveData);
     }
+    if (sGpu)
+        C3D_Fini();
     if (sLog)
         fclose(sLog);
     gfxExit();
@@ -338,8 +536,7 @@ static void Shutdown(void)
 void Backend_EndFrame(void)
 {
     FlushSave();
-    gfxFlushBuffers();
-    gfxScreenSwapBuffers(GFX_TOP, false);
+    gfxFlushBuffers(); // (the bottom screen's text)
     WaitForFrame();
     Part(T_WAIT);
     MeterEndFrame();
@@ -409,7 +606,7 @@ static void Watchdog(void *arg)
         if (!reported || now - lastChange > (u64)(3 + 10 * reported) * SYSCLOCK_ARM11) {
             char line[160];
             consoleSelect(&sConsole);
-            printf("\x1b[12;1H\x1b[31mNo frame for %lu s:\x1b[0m        \n",
+            printf("\x1b[16;1H\x1b[31mNo frame for %lu s:\x1b[0m        \n",
                    (unsigned long)((now - lastChange) / SYSCLOCK_ARM11));
             Backend_Log("watchdog: no frame for %lu s", (unsigned long)((now - lastChange) / SYSCLOCK_ARM11));
             for (int i = 0; i < 4; i++) {
@@ -472,6 +669,9 @@ int main(void)
     if (!threadCreate(Watchdog, NULL, 16 * 1024, prio - 1, -2, true))
         Backend_Log("watchdog: could not start");
 
+    if (sLog)
+        Port_SetProfiling(svcGetSystemTick); // (the drawing profile in port.log)
+    GpuInit();
     BuildScaleMaps();
     ClearTop();
     AudioInit();
