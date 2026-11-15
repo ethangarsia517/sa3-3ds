@@ -37,6 +37,10 @@ void Port_Main(void) __attribute__((noreturn));
 int Port_DisplayWidth(void);
 int Port_DisplayHeight(void);
 uint32_t Port_FrameCount(void);
+// A line describing what the game is doing right now (frame, which step of
+// the frame loop, scanline, the running task), for the backend's watchdog.
+// Only reads memory: safe to call from another thread while the game hangs.
+void Port_Describe(char *buf, int size);
 
 // --- Renderer (ppu.c) ---------------------------------------------------------
 

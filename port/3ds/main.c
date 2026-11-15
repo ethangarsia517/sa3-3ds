@@ -29,6 +29,9 @@
 
 const int Backend_Version1_UpdateRepoIfMissing = 1;
 
+// The main thread's stack (libctru's default is 32 KiB; PC builds have MBs).
+u32 __stacksize__ = 1024 * 1024;
+
 static PrintConsole sConsole;
 static FILE *sLog;
 static int sAudioOn;
@@ -346,6 +349,8 @@ void Backend_EndFrame(void)
     }
 }
 
+static LightLock sLogLock;
+
 void Backend_Log(const char *fmt, ...)
 {
     char buf[256];
@@ -355,9 +360,64 @@ void Backend_Log(const char *fmt, ...)
     va_end(ap);
     svcOutputDebugString(buf, (s32)strlen(buf));
     if (sLog != NULL) {
+        LightLock_Lock(&sLogLock);
         fputs(buf, sLog);
         fputc('\n', sLog);
         fflush(sLog);
+        LightLock_Unlock(&sLogLock);
+    }
+}
+
+// --- Watchdog -------------------------------------------------------------------------
+//
+// A higher-priority thread that notices when frames stop coming. Then it
+// shows on the bottom screen (and logs) what the game was doing, sampled a
+// few times so a loop between several tasks shows up, and lets START+SELECT
+// quit, since HOME can't work while the main thread is stuck.
+
+static volatile int sWatchdogRun = 1;
+
+static void Watchdog(void *arg)
+{
+    u32 lastFrame = Port_FrameCount();
+    u64 lastChange = svcGetSystemTick();
+    int reported = 0;
+    while (sWatchdogRun) {
+        svcSleepThread(250 * 1000 * 1000LL); // 0.25 s
+        u32 frame = Port_FrameCount();
+        u64 now = svcGetSystemTick();
+        if (frame != lastFrame) {
+            lastFrame = frame;
+            lastChange = now;
+            reported = 0;
+            continue;
+        }
+        if (now - lastChange < 3ULL * SYSCLOCK_ARM11)
+            continue;
+
+        // Stuck for 3 s or more. Report once, then again every 10 s.
+        if (!reported || now - lastChange > (u64)(3 + 10 * reported) * SYSCLOCK_ARM11) {
+            char line[160];
+            consoleSelect(&sConsole);
+            printf("\x1b[12;1H\x1b[31mNo frame for %lu s:\x1b[0m        \n",
+                   (unsigned long)((now - lastChange) / SYSCLOCK_ARM11));
+            Backend_Log("watchdog: no frame for %lu s", (unsigned long)((now - lastChange) / SYSCLOCK_ARM11));
+            for (int i = 0; i < 4; i++) {
+                Port_Describe(line, sizeof(line));
+                printf("%s\n", line);
+                Backend_Log("watchdog: %s", line);
+                svcSleepThread(50 * 1000 * 1000LL);
+            }
+            printf("\nSTART+SELECT: quit\n");
+            reported++;
+        }
+        hidScanInput();
+        if ((hidKeysHeld() & (KEY_START | KEY_SELECT)) == (KEY_START | KEY_SELECT)) {
+            Backend_Log("watchdog: quit");
+            if (sLog)
+                fclose(sLog);
+            svcExitProcess();
+        }
     }
 }
 
@@ -394,6 +454,12 @@ int main(void)
         fclose(flag);
         sLog = fopen(LOG_PATH, "w");
     }
+
+    LightLock_Init(&sLogLock);
+    s32 prio = 0x30;
+    svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    if (!threadCreate(Watchdog, NULL, 16 * 1024, prio - 1, -2, true))
+        Backend_Log("watchdog: could not start");
 
     BuildScaleMaps();
     ClearTop();

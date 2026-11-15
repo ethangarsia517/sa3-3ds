@@ -6,6 +6,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "global.h"
@@ -17,6 +18,7 @@
 #include "lib/agb_flash/flash_internal.h"
 #include "platform/shared/dma.h"
 #include "platform/shared/audio/cgb_audio.h"
+#include "task.h"
 #include "port.h"
 
 extern IntrFunc gIntrTable[16];
@@ -34,6 +36,33 @@ int Port_DisplayHeight(void) { return DISPLAY_HEIGHT; }
 uint32_t Port_FrameCount(void) { return sFrameCount; }
 
 void DoSoftReset(void) { }
+
+// --- Diagnostics ----------------------------------------------------------------
+
+// Which step of the frame the game is in (read by the backend's watchdog).
+enum {
+    STEP_BOOT,
+    STEP_GAME, // the game's own code, between frames
+    STEP_DRAW,
+    STEP_PRESENT,
+    STEP_VBLANK_INTR,
+    STEP_END_FRAME,
+};
+static const char *const sStepNames[] = { "boot", "game", "draw", "present", "vblank-intr", "end-frame" };
+static volatile int sStep = STEP_BOOT;
+
+void Port_Describe(char *buf, int size)
+{
+    int step = sStep;
+    struct Task *task = gCurTask;
+    void *main = NULL;
+    // gCurTask points into gTasks when valid
+    if ((uintptr_t)task >= (uintptr_t)&gTasks[0] && (uintptr_t)task < (uintptr_t)&gTasks[MAX_TASK_NUM])
+        main = (void *)task->main;
+    snprintf(buf, size, "frame %lu step %s line %u task %p main %p tasks %ld flags %08lx",
+             (unsigned long)sFrameCount, (step >= 0 && step <= STEP_END_FRAME) ? sStepNames[step] : "?",
+             (unsigned)REG_VCOUNT, (void *)task, main, (long)gNumTasks, (unsigned long)gFlags);
+}
 
 // --- Saves --------------------------------------------------------------------
 //
@@ -109,11 +138,14 @@ void VBlankIntrWait(void)
 {
     REG_KEYINPUT = KEYS_MASK ^ Backend_PollKeys();
 
+    sStep = STEP_DRAW;
     Backend_DrawStart();
     Ppu_DrawFrame(sFrame);
     REG_VCOUNT = DISPLAY_HEIGHT + 1; // in VBlank
+    sStep = STEP_PRESENT;
     Backend_Present(sFrame, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
+    sStep = STEP_VBLANK_INTR;
     REG_DISPSTAT |= INTR_FLAG_VBLANK;
     RunDMAs(DMA_VBLANK);
     if (REG_DISPSTAT & DISPSTAT_VBLANK_INTR)
@@ -121,8 +153,12 @@ void VBlankIntrWait(void)
     REG_DISPSTAT &= ~INTR_FLAG_VBLANK;
 
     sFrameCount++;
+    if (sFrameCount <= 30 || sFrameCount % 600 == 0)
+        Backend_Log("frame %lu done", (unsigned long)sFrameCount);
+    sStep = STEP_END_FRAME;
     SaveTick();
     Backend_EndFrame();
+    sStep = STEP_GAME;
 }
 
 void Port_Main(void)
@@ -137,6 +173,7 @@ void Port_Main(void)
 #endif
 
     Backend_Log("sa3-3ds: %dx%d", DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    sStep = STEP_GAME;
     AgbMain();
     Backend_Fatal("AgbMain returned");
 }
