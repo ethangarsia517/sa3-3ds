@@ -1,0 +1,204 @@
+diff --git a/Makefile b/Makefile
+index 3e3935a..822165f 100644
+--- a/Makefile
++++ b/Makefile
+@@ -42,6 +42,10 @@ ifeq ($(PLATFORM),gba)
+     endif
+   endif
+ 
++  PREFIX := arm-none-eabi-
++# Nintendo 3DS (sa3-3ds): game code for the ARM11, with a plain arm-none-eabi GCC.
++# The .3dsx itself is linked by sa3-3ds's own Makefile with devkitARM.
++else ifeq ($(PLATFORM),3ds)
+   PREFIX := arm-none-eabi-
+ # x86
+ else ifeq ($(CPU_ARCH),i386)
+@@ -120,6 +124,11 @@ else ifeq ($(PLATFORM),sdl)
+ ROM      := $(BUILD_NAME).sdl
+ ELF      := $(ROM).elf
+ MAP      := $(ROM).map
++else ifeq ($(PLATFORM),3ds)
++# Partially linked game + platform core (contains data from your ROM: keep it to yourself)
++ROM      := $(BUILD_NAME)-game.o
++ELF      := $(OBJ_DIR)/$(BUILD_NAME)-game.partial.o
++MAP      := $(BUILD_NAME)-game.map
+ else
+ ROM      := $(BUILD_NAME).$(PLATFORM).exe
+ ELF      := $(ROM:.exe=.elf)
+@@ -161,6 +170,8 @@ else ifeq ($(PLATFORM),sdl_win32)
+ C_SRCS := $(shell find $(C_SUBDIR) -name "*.c" -not -path "*/platform/win32/*")
+ else ifeq ($(PLATFORM),win32)
+ C_SRCS := $(shell find $(C_SUBDIR) -name "*.c" -not -path "*/platform/pret_sdl/*")
++else ifeq ($(PLATFORM),3ds)
++C_SRCS := $(shell find -L $(C_SUBDIR) -name "*.c" -not -path "*/platform/win32/*" -not -path "*/platform/pret_sdl/*")
+ else
+ C_SRCS := $(shell find $(C_SUBDIR) -name "*.c")
+ endif
+@@ -229,6 +240,15 @@ else
+ 		CPPFLAGS += -D TITLE_BAR=$(BUILD_NAME).$(PLATFORM) -D PLATFORM_GBA=0 -D PLATFORM_SDL=1 -D PLATFORM_WIN32=0 $(SDL_MINGW_FLAGS)
+ 	else ifeq ($(PLATFORM),win32)
+ 		CPPFLAGS += -D TITLE_BAR=$(BUILD_NAME).$(PLATFORM) -D PLATFORM_GBA=0 -D PLATFORM_SDL=0 -D PLATFORM_WIN32=1
++	else ifeq ($(PLATFORM),3ds)
++		# WIDE=1: the 3DS top screen's own 400x240 (the widescreen hack); else the GBA's 240x160
++		WIDE ?= 0
++		CPPFLAGS += -D PLATFORM_GBA=0 -D PLATFORM_SDL=0 -D PLATFORM_WIN32=0 -D PLATFORM_3DS=1 -D SA3_3DS_WIDE=$(WIDE)
++		# ARM11 (ARMv6K, hard float, libctru's soft thread pointer). Decompiled code
++		# relies on GBA-era compiler leniency: no strict aliasing, wrapping overflow.
++		CC1FLAGS += -marm -march=armv6k+fp -mtune=mpcore -mfloat-abi=hard -mtp=soft \
++		            -ffunction-sections -fdata-sections -fno-strict-aliasing -fwrapv -fno-common \
++		            -Wno-parentheses -Wno-unused-value
+ 	endif
+ 
+ 	ifeq ($(CPU_ARCH),i386)
+@@ -245,6 +265,10 @@ ifeq ($(PLATFORM),gba)
+   ASFLAGS  += -mcpu=arm7tdmi -mthumb-interwork
+   CC1FLAGS += -mthumb-interwork
+ else
++  ifeq ($(PLATFORM), 3ds)
++    CPP := $(CC1) -E
++    ASFLAGS += -march=armv6k -mfloat-abi=hard
++  endif
+   ifeq ($(PLATFORM), sdl)
+     # for modern we are using a modern compiler
+     # so instead of CPP we can use gcc -E to "preprocess only"
+@@ -318,6 +342,9 @@ endif
+ # these commands will run regardless of deps being completed
+ .PHONY: clean tools tidy clean-tools $(TOOLDIRS) libagbsyscall
+ 
++# sa3-3ds: where its tools are (port_song.py)
++PORT_TOOLS ?= $(realpath ../../tools)
++
+ # Ensure required directories exist
+ $(shell mkdir -p $(C_BUILDDIR) $(ASM_BUILDDIR) $(DATA_ASM_BUILDDIR) $(SOUND_ASM_BUILDDIR) $(SONG_BUILDDIR) $(MID_BUILDDIR))
+ 
+@@ -410,6 +437,8 @@ sdl_win32:
+ 
+ win32: ; @$(MAKE) PLATFORM=win32 CPU_ARCH=i386
+ 
++3ds: ; @$(MAKE) PLATFORM=3ds
++
+ #### RECIPES ####
+ 
+ include songs.mk
+@@ -458,6 +487,9 @@ ifeq ($(PLATFORM),gba)
+ 	@echo "$(LD) -T $(LDSCRIPT) $(MAP_FLAG) $(MAP) <objects> <lib> -o $@"
+ 	@$(CPP) -P $(CPPFLAGS) $(LDSCRIPT) > $(OBJ_DIR)/$(LDSCRIPT)
+ 	@cd $(OBJ_DIR) && $(LD) -T $(LDSCRIPT) $(MAP_FLAG) $(ROOT_DIR)/$(MAP) $(OBJS_REL) $(LIBS) -o $(ROOT_DIR)/$@
++else ifeq ($(PLATFORM),3ds)
++	@echo "$(LD) -r <objects> -o $@"
++	@cd $(OBJ_DIR) && $(LD) -r -o $(ROOT_DIR)/$@ $(OBJS_REL)
+ else
+ 	@echo "$(CC1) $(MAP_FLAG)$(MAP) <objects> <lib> -o $@"
+ 	@touch $(ROOT_DIR)/$(MAP)
+@@ -470,6 +502,8 @@ ifeq ($(PLATFORM),gba)
+ 	$(FIX) $@ -p -t"$(TITLE)" -c$(GAME_CODE) -m$(MAKER_CODE) -r$(GAME_REVISION) --silent
+ else ifeq ($(PLATFORM),sdl)
+ 	cp $< $@
++else ifeq ($(PLATFORM),3ds)
++	cp $< $@
+ else
+ 	$(OBJCOPY) -O pei-x86-64 $< $@
+ endif
+@@ -502,6 +536,10 @@ $(ASM_BUILDDIR)/%.o: $(ASM_SUBDIR)/%.s $$(asm_dep)
+ $(DATA_ASM_BUILDDIR)/%.o: $(DATA_ASM_SUBDIR)/%.s
+ 	@echo "$(AS) <flags> -o $@ $<"
+ 	@$(PREPROC) $< $(PLATFORM) "" | $(CPP) $(CPPFLAGS) - | $(AS) $(ASFLAGS) -o $@ -
++ifeq ($(PLATFORM),3ds)
++	@# The 3DS CPU faults on misaligned multi-word accesses that the GBA's ignores
++	@$(OBJCOPY) --set-section-alignment .rodata=4 --set-section-alignment .data=4 --set-section-alignment .bss=4 $@
++endif
+ 
+ # Scan the ASM data dependencies to determine if any .inc files have changed
+ $(DATA_ASM_BUILDDIR)/%.d: $(DATA_ASM_SUBDIR)/%.s
+@@ -514,7 +552,13 @@ endif
+ 
+ $(SONG_BUILDDIR)/%.o: $(SONG_SUBDIR)/%.s
+ 	@echo "$(AS) <flags> -o $@ $<"
++ifeq ($(PLATFORM),3ds)
++	@# GOTO/PATT targets stored self-relative: .3dsx can't relocate unaligned pointers
++	@$(PREPROC) $< $(PLATFORM) "" | python3 $(PORT_TOOLS)/port_song.py | $(CPP) $(CPPFLAGS) - | $(AS) $(ASFLAGS) -o $@ -
++	@$(OBJCOPY) --set-section-alignment .rodata=4 --set-section-alignment .data=4 $@
++else
+ 	@$(PREPROC) $< $(PLATFORM) "" | $(CPP) $(CPPFLAGS) - | $(AS) $(ASFLAGS) -o $@ -
++endif
+ 
+ ### SUB-PROGRAMS ###
+ 
+diff --git a/include/gba/defines.h b/include/gba/defines.h
+index 25cbe5b..cc8ac44 100644
+--- a/include/gba/defines.h
++++ b/include/gba/defines.h
+@@ -44,6 +44,15 @@
+ // PSP: Use GBA-native resolution, SDL scales to 480x272
+ #define DISPLAY_WIDTH  240
+ #define DISPLAY_HEIGHT 160
++#elif PLATFORM_3DS
++// sa3-3ds: the GBA's own size by default; WIDE=1 fills the 3DS top screen 1:1
++#if SA3_3DS_WIDE
++#define DISPLAY_WIDTH  400
++#define DISPLAY_HEIGHT 240
++#else
++#define DISPLAY_WIDTH  240
++#define DISPLAY_HEIGHT 160
++#endif
+ #elif defined(__PS2__)
+ // Runs at 60fps with the "fast draw"
+ #define DISPLAY_WIDTH  320
+diff --git a/src/game/sa3/cutscenes/new_game_opening.c b/src/game/sa3/cutscenes/new_game_opening.c
+index 157ba26..9d6829d 100644
+--- a/src/game/sa3/cutscenes/new_game_opening.c
++++ b/src/game/sa3/cutscenes/new_game_opening.c
+@@ -1315,7 +1315,7 @@ bool32 sub_80AE09C(NewGameOpening9C *strc9C)
+     return 0U;
+ }
+ 
+-s32 sub_80AE110(NewGameOpening9C *strc9C)
++AnimCmdResult sub_80AE110(NewGameOpening9C *strc9C)
+ {
+     Sprite *temp_r6 = (Sprite *)&strc9C->sprC;
+     Sprite *var_r5;
+diff --git a/src/platform/shared/audio/m4a_sound_mixer.c b/src/platform/shared/audio/m4a_sound_mixer.c
+index 192e07d..ab0b470 100644
+--- a/src/platform/shared/audio/m4a_sound_mixer.c
++++ b/src/platform/shared/audio/m4a_sound_mixer.c
+@@ -372,6 +372,13 @@ void MP2K_event_fine(struct MP2KPlayerState *unused, struct MP2KTrack *track)
+ void MP2K_event_goto(struct MP2KPlayerState *unused, struct MP2KTrack *track)
+ {
+     u8 *cmdPtr = track->cmdPtr;
++#if PLATFORM_3DS
++    // sa3-3ds stores jump targets self-relative (tools/port_song.py): the
++    // .3dsx format cannot relocate the unaligned pointers songs keep here.
++    u32 rel = cmdPtr[0] | (cmdPtr[1] << 8) | (cmdPtr[2] << 16) | ((u32)cmdPtr[3] << 24);
++    track->cmdPtr = cmdPtr + (s32)rel;
++    return;
++#endif
+     uintptr_t addr = 0;
+     for (size_t i = sizeof(uintptr_t) - 1; i > 0; i--) {
+         addr |= cmdPtr[i];
+diff --git a/src/platform/shared/dma.c b/src/platform/shared/dma.c
+index 8177621..335a793 100644
+--- a/src/platform/shared/dma.c
++++ b/src/platform/shared/dma.c
+@@ -4,7 +4,7 @@
+ 
+ struct DMATransfer DMAList[DMA_COUNT] = { 0 };
+ 
+-void RunDMAs(u32 type)
++void RunDMAs(DmaStartTypes type)
+ {
+     for (int dmaNum = 0; dmaNum < DMA_COUNT; dmaNum++) {
+         struct DMATransfer *dma = &DMAList[dmaNum];
+diff --git a/tools/preproc/preproc.cpp b/tools/preproc/preproc.cpp
+index 86b71a0..f804c5f 100644
+--- a/tools/preproc/preproc.cpp
++++ b/tools/preproc/preproc.cpp
+@@ -147,7 +147,8 @@ int main(int argc, char **argv)
+     || (!platform.compare("sdl"))
+     || (!platform.compare("sdl_win32"))
+     || (!platform.compare("sdl_psp"))
+-    || (!platform.compare("ps2")))
++    || (!platform.compare("ps2"))
++    || (!platform.compare("3ds")))
+     {
+         fullRGBA = false;
+     } else if(!platform.compare("win32")) {

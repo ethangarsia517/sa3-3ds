@@ -1,0 +1,6 @@
+[sa3]
+repository = "https://github.com/SAT-R/sa3"
+commit = "591eb43ab31a53e9ce5faf7f72512ba197f6868f"
+[rom]
+name = "baserom_sa3.gba"
+sha1 = "685af3a2dc0f1b3f8922e73ec42c1dc92e210e39"

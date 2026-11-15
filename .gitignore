@@ -1,0 +1,25 @@
+# Never commit game data: ROMs, saves, or anything built or extracted from them.
+*.gba
+*.sav
+*.sav.bak
+baserom*
+*.pak
+
+# Build output
+build/
+*.elf
+*.3dsx
+*.smdh
+*.cia
+*.map
+*.o
+*.d
+
+# Local logs and editor files
+*.log
+.vscode/
+.DS_Store
+
+# Python caches
+__pycache__/
+*.pyc
