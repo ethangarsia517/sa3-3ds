@@ -42,7 +42,10 @@ extern uint64_t gPpuProf[3];
 // semi-transparent sprites; sprite rows drawn, their pixels, rotated rows.
 enum {
     PPU_ST_LINES, PPU_ST_EFFECT1, PPU_ST_EFFECT2, PPU_ST_EFFECT3, PPU_ST_EFFECT_NONE, PPU_ST_WINDOWS, PPU_ST_SEMI,
-    PPU_ST_OBJ_ROWS, PPU_ST_OBJ_PIXELS, PPU_ST_OBJ_AFFINE_ROWS, PPU_ST_COUNT
+    PPU_ST_OBJ_ROWS, PPU_ST_OBJ_PIXELS, PPU_ST_OBJ_AFFINE_ROWS,
+    // background lines drawn: from the cache, decoded from VRAM (the cache
+    // doesn't fit: settings changed in the frame), with mosaic, rotated
+    PPU_ST_BG_CACHED, PPU_ST_BG_DIRECT, PPU_ST_BG_MOSAIC, PPU_ST_BG_AFFINE, PPU_ST_COUNT
 };
 extern uint32_t gPpuStat[PPU_ST_COUNT];
 

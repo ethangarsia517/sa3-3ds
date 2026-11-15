@@ -77,6 +77,16 @@ Not checked: the final devkitARM link, 3dsxtool, and anything at run time.
      not drawn makes it up): every other frame drawn at these speeds;
    - effects that change nothing (brighten/darken at 0, alpha 16/0) taken
      as none in compose; counts of what lines use, in port.log;
+     fourth run: drawn 28-43 fps in most play (compose down to 5-7 ms:
+     sa3's fade effect is on at 0 on nearly every line; windows on all of
+     them); drawing 17-19 ms (needs ~12 for every frame), sprites ~4-5 ms
+     for ~8,000 pixels, 14-18 in scenes with many rotated or
+     semi-transparent sprites; backgrounds 3-7, ~10 in some scenes;
+   - sprites: regular ones a tile row at a time (transparent rows skipped),
+     rotated ones stepped (the same pixels); background lines counted by
+     path (cached, decoded, mosaic, rotated);
+   - next: drawing split across both cores (Old 3DS: up to 80% of the
+     system core; New 3DS: a free core);
    - present on the GPU (citro3d) with scaling, as pmd-red-3ds does, instead
      of the CPU copy;
    - the sound mixer on the second core (Old 3DS: the system core).

@@ -67,7 +67,8 @@ void Port_TakeProfile(uint64_t out[PROF_COUNT]);
 // semi-transparent sprites; sprite rows, their pixels, rotated sprite rows.
 enum {
     STAT_LINES, STAT_ALPHA, STAT_BRIGHTEN, STAT_DARKEN, STAT_NO_EFFECT, STAT_WINDOWS, STAT_SEMI,
-    STAT_OBJ_ROWS, STAT_OBJ_PIXELS, STAT_OBJ_AFFINE_ROWS, STAT_COUNT
+    STAT_OBJ_ROWS, STAT_OBJ_PIXELS, STAT_OBJ_AFFINE_ROWS,
+    STAT_BG_CACHED, STAT_BG_DIRECT, STAT_BG_MOSAIC, STAT_BG_AFFINE, STAT_COUNT
 };
 void Port_TakeStats(uint32_t out[STAT_COUNT]);
 

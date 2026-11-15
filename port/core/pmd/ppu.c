@@ -1,7 +1,9 @@
 // sa3-3ds: pmd-red-3ds's renderer (port/core/ppu.c at commit 9a79b39), unchanged
 // but for the #undef before `#define gPortRegs sRegs`, the profile's timing
 // in Ppu_RenderLine (gPpuTicks, gPpuProf: off unless set) and counts
-// (gPpuStat), and in Compose: effects that change nothing taken as none. Its wide view, HUD row
+// (gPpuStat), in Compose: effects that change nothing taken as none, and in
+// RenderObjects: regular sprites a tile row at a time, rotated ones' texture
+// position stepped rather than multiplied out (the same pixels: make test). Its wide view, HUD row
 // and drawing list are never switched on here. Copy changes over from
 // pmd-red-3ds as they come.
 
@@ -681,6 +683,7 @@ static int RenderTextBg(int bg, int line, uint16_t *out)
 static int RenderTextBgVram(int bg, int line, uint16_t *out, uint16_t cnt)
 {
     if (cnt & 0x40) {
+        gPpuStat[PPU_ST_BG_MOSAIC]++; // (sa3-3ds: the profile)
         RenderTextBgMosaic(bg, line, out);
         sLastMask = ALL_GROUPS; sLastFull = 0;
         return 1;
@@ -696,8 +699,11 @@ static int RenderTextBgVram(int bg, int line, uint16_t *out, uint16_t cnt)
     int y = (line + vofs) & (heightPx - 1);
     BgCache *c = &gBgCache[bg];
     if (c->valid && !c->wideMap && c->charBase == charBase && c->screenBase == screenBase
-        && c->color256 == color256 && c->size == size && c->edge == sWide)
+        && c->color256 == color256 && c->size == size && c->edge == sWide) {
+        gPpuStat[PPU_ST_BG_CACHED]++;
         return RenderCachedLine(c, y, (hofs - sOx) & (widthPx - 1), out);
+    }
+    gPpuStat[PPU_ST_BG_DIRECT]++;
     int inY = y & 7;
     unsigned rowBlock = (y >= 256) ? ((widthPx == 512) ? 2 : 1) : 0;
     unsigned rowOff = screenBase + rowBlock * 0x800 + ((y >> 3) & 31) * 64;
@@ -755,6 +761,7 @@ static int RenderTextBgVram(int bg, int line, uint16_t *out, uint16_t cnt)
 
 static void RenderAffineBg(int bg, uint16_t *out)
 {
+    gPpuStat[PPU_ST_BG_AFFINE]++; // (sa3-3ds: the profile)
     int i = bg - 2;
     uint16_t cnt = R16(0x08 + bg * 2);
     unsigned charBase = ((cnt >> 2) & 3) * 0x4000;
@@ -907,6 +914,26 @@ static void RenderObjects(int line, uint16_t dispcnt)
             int16_t pb = (int16_t)(gPortOam[p + 14] | (gPortOam[p + 15] << 8));
             int16_t pc = (int16_t)(gPortOam[p + 22] | (gPortOam[p + 23] << 8));
             int16_t pd = (int16_t)(gPortOam[p + 30] | (gPortOam[p + 31] << 8));
+            if (!objMosaic) {
+                // sa3-3ds: the same sums stepped by pa and pc along the row
+                // rather than multiplied out at each pixel (the same pixels)
+                int bx0 = x < 0 ? -x : 0;
+                int bx1 = (x + boundW > sW) ? sW - x : boundW;
+                int cy = row - boundH / 2;
+                int fx = pa * (bx0 - boundW / 2) + pb * cy;
+                int fy = pc * (bx0 - boundW / 2) + pd * cy;
+                for (int bx = bx0; bx < bx1; bx++, fx += pa, fy += pc) {
+                    int tx = (fx >> 8) + w / 2;
+                    int ty = (fy >> 8) + h / 2;
+                    if ((unsigned)tx >= (unsigned)w || (unsigned)ty >= (unsigned)h)
+                        continue;
+                    unsigned tile = tileNum + (ty >> 3) * rowStride + (tx >> 3) * tileStep;
+                    unsigned idx = ObjTexel(tile, tx, ty, color256);
+                    if (idx)
+                        ObjPlot(x + bx, idx, mode, prio, color256, palBank);
+                }
+                continue;
+            }
             for (int bx = 0; bx < boundW; bx++) {
                 int sx = x + bx;
                 if (sx < 0 || sx >= sW)
@@ -944,11 +971,57 @@ static void RenderObjects(int line, uint16_t dispcnt)
             }
             continue;
         }
-        for (int bx = bx0; bx < bx1; bx++) {
+        // sa3-3ds: a tile's row (8 pixels) read at once, and skipped
+        // when it is all transparent; the pixels plotted as ObjPlot does
+        // (the same pixels).
+        const uint16_t *pal = PAL16 + 256 + (color256 ? 0 : palBank * 16);
+        const int tyIn = ty & 7;
+        const int semi = (mode == 1);
+        int minX = sObjMinX, maxX = sObjMaxX, wrote = 0;
+        for (int bx = bx0; bx < bx1;) {
             int tx = hflip ? w - 1 - bx : bx;
-            unsigned idx = ObjTexel(rowTile + (tx >> 3) * tileStep, tx, ty, color256);
-            if (idx)
-                ObjPlot(x + bx, idx, mode, prio, color256, palBank);
+            int n = hflip ? (tx & 7) + 1 : 8 - (tx & 7); // this tile's pixels from here on, in screen order
+            if (n > bx1 - bx)
+                n = bx1 - bx;
+            unsigned tile = (rowTile + (tx >> 3) * tileStep) & 0x3FF;
+            uint32_t lo, hi = 0;
+            if (color256) {
+                unsigned a = 0x10000 + tile * 32 + tyIn * 8;
+                lo = a < 0x18000 ? *(const uint32_t *)&gPortVram[a] : 0;
+                hi = a < 0x18000 ? *(const uint32_t *)&gPortVram[a + 4] : 0;
+            } else {
+                unsigned a = 0x10000 + tile * 32 + tyIn * 4;
+                lo = a < 0x18000 ? *(const uint32_t *)&gPortVram[a] : 0;
+            }
+            if (lo | hi) {
+                int t = tx & 7;
+                for (int i = 0; i < n; i++, t += hflip ? -1 : 1) {
+                    unsigned idx = color256 ? (((t < 4 ? lo : hi) >> ((t & 3) * 8)) & 0xFF) : ((lo >> (t * 4)) & 0xF);
+                    if (!idx)
+                        continue;
+                    int sx = x + bx + i;
+                    if (sx < minX) minX = sx;
+                    if (sx > maxX) maxX = sx;
+                    if (mode == 2) {
+                        sObj.win[sx] = 1;
+                        sObjWinAny = 1;
+                    } else if (prio < sObj.prio[sx]) {
+                        sObj.color[sx] = pal[idx] & 0x7FFF;
+                        sObj.prio[sx] = (uint8_t)prio;
+                        sObj.semi[sx] = (uint8_t)semi;
+                        wrote = 1;
+                    }
+                }
+            }
+            bx += n;
+        }
+        sObjMinX = minX;
+        sObjMaxX = maxX;
+        if (wrote) {
+            sObjAny = 1;
+            sObjPrioMask |= 1u << prio;
+            if (semi)
+                sObjSemiAny = 1;
         }
     }
 }

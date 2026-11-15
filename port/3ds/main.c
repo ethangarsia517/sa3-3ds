@@ -105,6 +105,9 @@ static void MeterEndFrame(void)
                     (double)(100.0f * st[STAT_WINDOWS] / lines), (double)(100.0f * st[STAT_SEMI] / lines),
                     (double)(st[STAT_OBJ_ROWS] / frames), (double)(st[STAT_OBJ_PIXELS] / frames),
                     (double)(st[STAT_OBJ_AFFINE_ROWS] / frames));
+        Backend_Log("  background lines per frame: cached %.0f decoded %.0f mosaic %.0f rotated %.0f",
+                    (double)(st[STAT_BG_CACHED] / frames), (double)(st[STAT_BG_DIRECT] / frames),
+                    (double)(st[STAT_BG_MOSAIC] / frames), (double)(st[STAT_BG_AFFINE] / frames));
     } else if (sLog != NULL) {
         uint64_t prof[PROF_COUNT];
         uint32_t st[STAT_COUNT];
