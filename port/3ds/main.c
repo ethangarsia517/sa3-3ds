@@ -29,7 +29,7 @@
 #define DEBUG_FLAG DATA_DIR "/debug.txt"
 #define CPU_VIDEO_FLAG DATA_DIR "/cpu-video.txt" // the picture copied by the CPU, not the GPU
 
-const int Backend_Version2_UpdateRepoIfMissing = 1;
+const int Backend_Version3_UpdateRepoIfMissing = 1;
 
 // The main thread's stack (libctru's default is 32 KiB; PC builds have MBs).
 u32 __stacksize__ = 1024 * 1024;
@@ -47,9 +47,14 @@ static bool sGpu;       // the GPU puts the picture on the screen (else the CPU 
 static u64 sDeadline;
 static int sLate;
 
-// Each part of a frame, in ticks, summed over the meter's window.
-enum { T_GAME, T_DRAW, T_PRESENT, T_WAIT, T_COUNT };
+// Each part of a frame, in ticks, summed over the meter's window: the game's
+// code; drawing and presenting (drawn frames); a frame not drawn's lines; the
+// VBlank interrupt; the rest (save check and file, OS); waiting for the screen.
+// And the parts of the window's slowest frame (sWorst).
+enum { T_GAME, T_DRAW, T_PRESENT, T_UNDRAWN, T_VBLANK, T_OTHER, T_WAIT, T_COUNT };
+static const char *const sPartNames[T_COUNT] = { "game", "draw", "present", "undrawn", "vblank", "other", "wait" };
 static u64 sPartTicks[T_COUNT];
+static u64 sFrameTicks[T_COUNT], sWorst[T_COUNT];
 static u64 sMarkTick;
 static u32 sMeterFrames, sMeterLate, sMeterDrawn;
 static u64 sMeterStart;
@@ -60,7 +65,32 @@ static void Part(int part)
 {
     u64 now = svcGetSystemTick();
     sPartTicks[part] += now - sMarkTick;
+    sFrameTicks[part] += now - sMarkTick;
     sMarkTick = now;
+}
+
+void Backend_Mark(int what)
+{
+    switch (what) {
+    case MARK_GAME: Part(T_GAME); break;
+    case MARK_UNDRAWN: Part(T_UNDRAWN); break;
+    case MARK_VBLANK: Part(T_VBLANK); break;
+    default: Part(T_OTHER); break;
+    }
+}
+
+// End of a frame's timing: the window's slowest frame (not counting the wait)
+static void FrameTimed(void)
+{
+    u64 busy = 0, worst = 0;
+    for (int i = 0; i < T_COUNT; i++)
+        if (i != T_WAIT) {
+            busy += sFrameTicks[i];
+            worst += sWorst[i];
+        }
+    if (busy > worst)
+        memcpy(sWorst, sFrameTicks, sizeof(sWorst));
+    memset(sFrameTicks, 0, sizeof(sFrameTicks));
 }
 
 static float TicksToMs(u64 ticks, u32 frames)
@@ -83,12 +113,20 @@ static void MeterEndFrame(void)
     sDrawnFps = (float)sMeterDrawn * (float)SYSCLOCK_ARM11 / (float)(now - sMeterStart);
     PrintStatus();
     if (sLog != NULL && Port_FrameCount() % 300 < 60) {
-        // game and wait: per frame; draw and present: per drawn frame
-        Backend_Log("frame %lu: %.1f fps (drawn %.1f), ms game %.2f wait %.2f, per drawn frame draw %.2f present %.2f, late %lu",
+        // draw and present: per drawn frame; the rest per frame
+        Backend_Log("frame %lu: %.1f fps (drawn %.1f), ms per frame: game %.2f vblank %.2f undrawn %.2f other %.2f wait %.2f;"
+                    " per drawn frame: draw %.2f present %.2f; late %lu",
                     (unsigned long)Port_FrameCount(), (double)sFps, (double)sDrawnFps,
-                    (double)TicksToMs(sPartTicks[T_GAME], sMeterFrames), (double)TicksToMs(sPartTicks[T_WAIT], sMeterFrames),
+                    (double)TicksToMs(sPartTicks[T_GAME], sMeterFrames), (double)TicksToMs(sPartTicks[T_VBLANK], sMeterFrames),
+                    (double)TicksToMs(sPartTicks[T_UNDRAWN], sMeterFrames), (double)TicksToMs(sPartTicks[T_OTHER], sMeterFrames),
+                    (double)TicksToMs(sPartTicks[T_WAIT], sMeterFrames),
                     (double)TicksToMs(sPartTicks[T_DRAW], sMeterDrawn), (double)TicksToMs(sPartTicks[T_PRESENT], sMeterDrawn),
                     (unsigned long)sMeterLate);
+        char worst[160];
+        int n = 0;
+        for (int i = 0; i < T_COUNT && n < (int)sizeof(worst); i++)
+            n += snprintf(worst + n, sizeof(worst) - n, " %s %.1f", sPartNames[i], (double)TicksToMs(sWorst[i], 1));
+        Backend_Log("  slowest frame, ms:%s", worst);
         uint64_t prof[PROF_COUNT];
         Port_TakeProfile(prof);
         Backend_Log("  drawing, ms per drawn frame: backgrounds %.2f sprites %.2f compose %.2f prepare %.2f interrupts %.2f",
@@ -116,6 +154,7 @@ static void MeterEndFrame(void)
     }
     (void)sProfTotal;
     memset(sPartTicks, 0, sizeof(sPartTicks));
+    memset(sWorst, 0, sizeof(sWorst));
     sMeterFrames = sMeterLate = sMeterDrawn = 0;
     sMeterStart = now;
 }
@@ -554,8 +593,10 @@ void Backend_EndFrame(void)
 {
     FlushSave();
     gfxFlushBuffers(); // (the bottom screen's text)
+    Part(T_OTHER);
     WaitForFrame();
     Part(T_WAIT);
+    FrameTimed();
     MeterEndFrame();
     if (!aptMainLoop()) {
         Shutdown();

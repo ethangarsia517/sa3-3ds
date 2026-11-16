@@ -26,7 +26,7 @@ extern uint8_t FLASH_BASE[FLASH_ROM_SIZE_1M * SECTORS_PER_BANK];
 extern void AgbMain(void);
 
 // (a backend from another version of the repo fails to link: see port.h)
-__attribute__((used)) static const int *const sBackendVersion = &Backend_Version2_UpdateRepoIfMissing;
+__attribute__((used)) static const int *const sBackendVersion = &Backend_Version3_UpdateRepoIfMissing;
 
 static uint16_t sFrame[DISPLAY_WIDTH * DISPLAY_HEIGHT] __attribute__((aligned(64)));
 static uint32_t sFrameCount;
@@ -150,8 +150,10 @@ void VBlankIntrWait(void)
         sStep = STEP_PRESENT;
         Backend_Present(sFrame, DISPLAY_WIDTH, DISPLAY_HEIGHT);
     } else {
+        Backend_Mark(MARK_GAME);
         Ppu_RunFrameUndrawn();
         REG_VCOUNT = DISPLAY_HEIGHT + 1;
+        Backend_Mark(MARK_UNDRAWN);
     }
 
     sStep = STEP_VBLANK_INTR;
@@ -160,12 +162,14 @@ void VBlankIntrWait(void)
     if (REG_DISPSTAT & DISPSTAT_VBLANK_INTR)
         gIntrTable[INTR_INDEX_VBLANK]();
     REG_DISPSTAT &= ~INTR_FLAG_VBLANK;
+    Backend_Mark(MARK_VBLANK);
 
     sFrameCount++;
     if (sFrameCount <= 30 || sFrameCount % 600 == 0)
         Backend_Log("frame %lu done", (unsigned long)sFrameCount);
     sStep = STEP_END_FRAME;
     SaveTick();
+    Backend_Mark(MARK_SAVE);
     Backend_EndFrame();
     sStep = STEP_GAME;
 }

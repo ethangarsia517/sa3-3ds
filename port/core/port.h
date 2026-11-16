@@ -77,6 +77,14 @@ void Port_TakeStats(uint32_t out[STAT_COUNT]);
 // The frame's drawing starts now (the performance meter: game logic until
 // here, drawing from here to Backend_Present).
 void Backend_DrawStart(void);
+// The performance meter's other marks: what ran since the last mark.
+enum {
+    MARK_GAME,     // the game's code (a frame not drawn: Backend_DrawStart isn't called)
+    MARK_UNDRAWN,  // a frame not drawn: its lines' interrupts and DMAs
+    MARK_VBLANK,   // the VBlank interrupt (the game's handler) and VBlank DMAs
+    MARK_SAVE,     // the save image's check
+};
+void Backend_Mark(int what);
 // Whether to draw this frame (frame skip): asked before each frame; when
 // not, Backend_DrawStart and Backend_Present are not called for it.
 bool Backend_ShouldDraw(void);
@@ -96,6 +104,6 @@ void Backend_Fatal(const char *msg) __attribute__((noreturn));
 
 // Renamed whenever the backend and the core must change together: linking an
 // old port/3ds/main.c with a newer sa3-game.o fails naming this symbol.
-extern const int Backend_Version2_UpdateRepoIfMissing;
+extern const int Backend_Version3_UpdateRepoIfMissing;
 
 #endif
