@@ -20,6 +20,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include "../core/port.h"
 
 #define DATA_DIR "sdmc:/3ds/sa3-3ds"
@@ -28,6 +30,7 @@
 #define LOG_PATH DATA_DIR "/port.log"
 #define DEBUG_FLAG DATA_DIR "/debug.txt"
 #define CPU_VIDEO_FLAG DATA_DIR "/cpu-video.txt" // the picture copied by the CPU, not the GPU
+#define SYSCORE_FLAG DATA_DIR "/syscore.txt"     // Old 3DS: the sound on the system core
 
 const int Backend_Version4_UpdateRepoIfMissing = 1;
 
@@ -43,6 +46,23 @@ static int sSkipOn = 1; // frame skip (touching the bottom screen switches it)
 static bool sGpu;       // the GPU puts the picture on the screen (else the CPU copies it)
 static int sWorkerCore = -1;    // the worker's core (the game's sound); -1: none
 static volatile u64 sWorkTicks; // the work's time on its core (meter window)
+
+// The CPU's writes out of its cache, for the GPU or the DSP: through the
+// kernel, on this core. (GSPGPU_FlushDataCache / DSP_FlushDataCache ask a
+// service on the system core, which waits for the system's share of that
+// core: slow whenever an app has the core too. pmd-red-3ds does the same.)
+static void FlushRange(const void *p, u32 size)
+{
+    if (R_FAILED(svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)p, size)))
+        GSPGPU_FlushDataCache(p, size);
+}
+
+static void FlushScreen(gfxScreen_t screen)
+{
+    u16 w, h;
+    void *fb = gfxGetFramebuffer(screen, GFX_LEFT, &w, &h);
+    FlushRange(fb, (u32)w * h * 2); // (RGB565)
+}
 
 // --- Timing / performance meter ---------------------------------------------
 
@@ -101,7 +121,11 @@ static float TicksToMs(u64 ticks, u32 frames);
 // screen.
 #define SPIKE_MS 40
 static int sSpikesLogged;
-static FILE *sLog;
+// The log: a plain file descriptor, written with write() by the writer
+// thread (no stdio FILE, whose locks the console's printf could wait on
+// while a slow SD write holds them). sLog: logging is on.
+static int sLogFd = -1;
+#define sLog (sLogFd >= 0)
 static void FrameTimed(void)
 {
     u64 busy = 0, worst = 0;
@@ -112,7 +136,7 @@ static void FrameTimed(void)
         }
     if (busy > worst)
         memcpy(sWorst, sFrameTicks, sizeof(sWorst));
-    if (sLog != NULL && TicksToMs(busy, 1) > SPIKE_MS && sSpikesLogged < 5) {
+    if (sLog && TicksToMs(busy, 1) > SPIKE_MS && sSpikesLogged < 5) {
         sSpikesLogged++;
         char parts[160];
         int n = 0;
@@ -144,7 +168,7 @@ static void MeterEndFrame(void)
     sFps = (float)sMeterFrames * (float)SYSCLOCK_ARM11 / (float)(now - sMeterStart);
     sDrawnFps = (float)sMeterDrawn * (float)SYSCLOCK_ARM11 / (float)(now - sMeterStart);
     PrintStatus();
-    if (sLog != NULL && Port_FrameCount() % 300 < 60) {
+    if (sLog && Port_FrameCount() % 300 < 60) {
         // draw and present: per drawn frame; the rest per frame
         Backend_Log("frame %lu%s: %.1f fps (drawn %.1f), ms per frame: game %.2f sound %.2f (core %d, waited %.2f) vblank %.2f"
                     " undrawn %.2f other %.2f wait %.2f; per drawn frame: draw %.2f present %.2f; late %lu",
@@ -180,7 +204,7 @@ static void MeterEndFrame(void)
         Backend_Log("  background lines per frame: cached %.0f decoded %.0f mosaic %.0f rotated %.0f",
                     (double)(st[STAT_BG_CACHED] / frames), (double)(st[STAT_BG_DIRECT] / frames),
                     (double)(st[STAT_BG_MOSAIC] / frames), (double)(st[STAT_BG_AFFINE] / frames));
-    } else if (sLog != NULL) {
+    } else if (sLog) {
         uint64_t prof[PROF_COUNT];
         uint32_t st[STAT_COUNT];
         Port_TakeProfile(prof); // (only the logged second's)
@@ -215,7 +239,11 @@ static void WaitForFrame(void)
 //
 // New 3DS models: core 2, free for apps. Old ones: core 1, the system's,
 // which an app may use up to a share of its time (APT_SetAppCpuTimeLimit,
-// 80%). If neither can be had, the core runs the work itself.
+// 80%) - only with sdmc:/3ds/sa3-3ds/syscore.txt: while an app has a share of
+// it, the system's services there (graphics, sound, SD card) wait for the
+// rest, and the main core's calls to them got slower (2-12 ms a frame in
+// all, the first time: more than the sound saved). Otherwise the main core
+// runs the work itself.
 
 static Thread sWorker;
 static LightEvent sWorkStart, sWorkDone;
@@ -243,7 +271,10 @@ static void WorkerInit(void)
         if (sWorker)
             sWorkerCore = 2;
     }
-    if (sWorkerCore < 0 && R_SUCCEEDED(APT_SetAppCpuTimeLimit(80))) {
+    FILE *flag = n3ds ? NULL : fopen(SYSCORE_FLAG, "r");
+    if (flag)
+        fclose(flag);
+    if (sWorkerCore < 0 && flag && R_SUCCEEDED(APT_SetAppCpuTimeLimit(80))) {
         sWorker = threadCreate(WorkerMain, NULL, 64 * 1024, 0x20, 1, true);
         if (sWorker)
             sWorkerCore = 1;
@@ -504,6 +535,7 @@ void Backend_Present(const uint16_t *frame, int width, int height)
                 *col++ = ToRgb565(src[y * width]);
         }
     }
+    FlushScreen(GFX_TOP);
     gfxScreenSwapBuffers(GFX_TOP, false); // (shown at the next VBlank)
     Part(T_PRESENT);
     sDrawCost = (sDrawCost * 7 + (sMarkTick - sDrawStartTick)) / 8;
@@ -530,8 +562,9 @@ static void PrintStatus(void)
     printf("Drawn  : %5.1f fps   \n", (double)sDrawnFps);
     if (!sAudioOn)
         printf("\n\x1b[33mNo sound: sdmc:/3ds/dspfirm.cdc missing.\x1b[0m\n");
-    if (sLog != NULL)
+    if (sLog)
         printf("\nLogging to %s\n", LOG_PATH);
+    FlushScreen(GFX_BOTTOM);
 }
 
 // --- Input -------------------------------------------------------------------------
@@ -618,7 +651,7 @@ void Backend_QueueAudio(const int16_t *stereo, int count, int rate)
             continue;
         memcpy(wb->data_pcm16, stereo, (size_t)count * 4);
         wb->nsamples = (u32)count;
-        DSP_FlushDataCache(wb->data_pcm16, (u32)count * 4);
+        FlushRange(wb->data_pcm16, (u32)count * 4);
         ndspChnWaveBufAdd(0, wb);
         return;
     }
@@ -686,14 +719,14 @@ static void Shutdown(void)
     sLogWriterRun = 0;
     LogWrite();
     if (sLog)
-        fclose(sLog);
+        close(sLogFd);
     gfxExit();
 }
 
 void Backend_EndFrame(void)
 {
     FlushSave();
-    gfxFlushBuffers(); // (the bottom screen's text)
+    // (the bottom screen's text is flushed where it's written: PrintStatus)
     Part(T_OTHER);
     WaitForFrame();
     Part(T_WAIT);
@@ -723,10 +756,8 @@ static void LogWrite(void)
     memcpy(out, sLogBuf, n);
     sLogLen = 0;
     LightLock_Unlock(&sLogLock);
-    if (n > 0 && sLog != NULL) {
-        fwrite(out, 1, n, sLog);
-        fflush(sLog);
-    }
+    if (n > 0 && sLog)
+        write(sLogFd, out, (size_t)n);
 }
 
 static void LogWriter(void *arg)
@@ -745,7 +776,7 @@ void Backend_Log(const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     svcOutputDebugString(buf, (s32)strlen(buf));
-    if (sLog != NULL) {
+    if (sLog) {
         int len = (int)strlen(buf);
         LightLock_Lock(&sLogLock);
         bool full = sLogLen + len + 1 > LOG_BUF;
@@ -821,6 +852,7 @@ static void Watchdog(void *arg)
                 svcSleepThread(50 * 1000 * 1000LL);
             }
             printf("\nSTART+SELECT: quit\n");
+            FlushScreen(GFX_BOTTOM);
             reported++;
         }
         hidScanInput();
@@ -828,7 +860,7 @@ static void Watchdog(void *arg)
             Backend_Log("watchdog: quit");
             LogWrite();
             if (sLog)
-                fclose(sLog);
+                close(sLogFd);
             svcExitProcess();
         }
     }
@@ -865,7 +897,7 @@ int main(void)
     FILE *flag = fopen(DEBUG_FLAG, "r");
     if (flag) {
         fclose(flag);
-        sLog = fopen(LOG_PATH, "w");
+        sLogFd = open(LOG_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     }
 
     LightLock_Init(&sLogLock);

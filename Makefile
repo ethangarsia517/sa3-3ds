@@ -28,6 +28,7 @@ PRELINK := $(BUILD)/sa3-game.o
 # needs a clean game build (make clean first): the picture size is compiled in.
 prelink:
 	@test -f $(UPSTREAM)/baserom_sa3.gba || { echo "Missing $(UPSTREAM)/baserom_sa3.gba (run tools/bootstrap.sh, then copy your ROM there)"; false; }
+	@tools/sync_upstream.sh
 	@$(MAKE) -C $(UPSTREAM) PLATFORM=3ds WIDE=$(WIDE) PORT_TOOLS=$(ROOT)/tools -j$(JOBS)
 	@cp $(UPSTREAM)/sa3-game.o $(PRELINK)
 	@echo "  ->   $(PRELINK) (partial; WIDE=$(WIDE))"

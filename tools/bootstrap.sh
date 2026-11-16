@@ -17,4 +17,5 @@ git clone "$REPO" build/upstream
 git -C build/upstream checkout --quiet "$COMMIT"
 git -C build/upstream apply ../../patches/sa3.patch
 ln -s ../../../../port/core build/upstream/src/platform/n3ds
+sha1sum patches/sa3.patch | cut -d' ' -f1 > build/upstream/.sa3-3ds-patch
 echo "Done. Copy your ROM to build/upstream/baserom_sa3.gba, then run: make prelink"

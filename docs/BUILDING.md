@@ -24,6 +24,10 @@ cp /path/to/your-rom.gba build/upstream/baserom_sa3.gba
 make prelink                                        # -> build/sa3-game.o
 ```
 
+After `git pull`, just `make prelink` again: if `patches/sa3.patch` changed,
+it applies it to `build/upstream` again by itself (and builds the game half
+from clean, a few minutes). Your ROM stays where it is.
+
 `make prelink WIDE=1` builds the 400x240 widescreen picture instead (sa3's
 widescreen support, which fills the 3DS top screen 1:1). It has more visual
 bugs than the GBA size and costs about 2.5x the drawing time. Switching
@@ -74,8 +78,10 @@ and presenting per drawn frame; then where the drawing time went
 interrupts). Full speed is 16.7 ms a frame in all. (The profile costs a
 little time itself, so frame rates are a bit lower with `debug.txt`.)
 The bottom screen and the log say where the game's sound runs: on core 2
-(New 3DS) or core 1 (Old 3DS), alongside drawing, or on the main core if
-neither could be had.
+(New 3DS models, alongside drawing) or on the main core. Old 3DS models can
+put it on the system core with an empty `SD:/3ds/sa3-3ds/syscore.txt`, but
+that slows the system's own services (graphics, sound, SD card) down, and
+the first try cost more than it saved.
 
 In a level, each line also gives the level's time as the HUD shows it
 (`level 1:23.45`), and any single frame over 40 ms gets a `spike:` line with
