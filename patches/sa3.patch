@@ -158,6 +158,25 @@ index 157ba26..9d6829d 100644
  {
      Sprite *temp_r6 = (Sprite *)&strc9C->sprC;
      Sprite *var_r5;
+diff --git a/src/lib/m4a/m4a.c b/src/lib/m4a/m4a.c
+index db16125..8f5bbe7 100644
+--- a/src/lib/m4a/m4a.c
++++ b/src/lib/m4a/m4a.c
+@@ -101,7 +101,14 @@ void m4aSoundInit(void)
+     }
+ }
+ 
++#if PLATFORM_3DS
++// sa3-3ds: noted, and run while the next frame is drawn, on another core
++// when there is one (port/core/platform.c, VBlankIntrWait)
++extern void Port_SoundMainRequest(void);
++void m4aSoundMain(void) { Port_SoundMainRequest(); }
++#else
+ void m4aSoundMain(void) { SoundMain(); }
++#endif
+ 
+ void m4aSongNumStart(u16 n)
+ {
 diff --git a/src/platform/shared/audio/m4a_sound_mixer.c b/src/platform/shared/audio/m4a_sound_mixer.c
 index 192e07d..ab0b470 100644
 --- a/src/platform/shared/audio/m4a_sound_mixer.c

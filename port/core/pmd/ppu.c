@@ -3,7 +3,9 @@
 // in Ppu_RenderLine (gPpuTicks, gPpuProf: off unless set) and counts
 // (gPpuStat), in Compose: effects that change nothing taken as none, and in
 // RenderObjects: regular sprites a tile row at a time, rotated ones' texture
-// position stepped rather than multiplied out (the same pixels: make test). Its wide view, HUD row
+// position stepped rather than multiplied out; Compose keeps the top layer
+// only when an effect needs it; RenderAffineBg reads the palette by
+// halfwords (the same pixels: make test). Its wide view, HUD row
 // and drawing list are never switched on here. Copy changes over from
 // pmd-red-3ds as they come.
 
@@ -787,7 +789,7 @@ static void RenderAffineBg(int bg, uint16_t *out)
         unsigned tile = mapOff < 0x10000 ? gPortVram[mapOff] : 0;
         unsigned a = charBase + tile * 64 + (y & 7) * 8 + (x & 7);
         unsigned idx = a < 0x10000 ? gPortVram[a] : 0;
-        out[sx] = idx ? Pal(idx) : TRANSPARENT;
+        out[sx] = idx ? (PAL16[idx] & 0x7FFF) : TRANSPARENT; // (sa3-3ds: as Pal(idx), a halfword read)
     }
 }
 
@@ -1238,8 +1240,13 @@ static void Compose(int line, uint16_t *dst, const int bgOn[4], const int bgPrio
 
     uint16_t backdrop = Pal(0);
     Fill16(dst, backdrop, sW);
-    memset(topL, L_BD, sizeof(topL));
     int needSec = (effect == 1) || sObjSemiAny;
+    // sa3-3ds: which layer is on top is only looked at by the colour
+    // effects below (and kept for the second layer with them): without an
+    // effect or semi-transparent sprites, it isn't kept at all.
+    const int needTop = effect != 0 || sObjSemiAny;
+    if (needTop)
+        memset(topL, L_BD, sizeof(topL));
     if (needSec) {
         memset(secL, L_BD, sizeof(secL));
         Fill16(secC, backdrop, sW);
@@ -1271,7 +1278,8 @@ static void Compose(int line, uint16_t *dst, const int bgOn[4], const int bgPrio
                     memcpy(&secL[x], &topL[x], n);
                 }
                 memcpy(&dst[x], &src[x], n * sizeof(uint16_t));
-                memset(&topL[x], b, n);
+                if (needTop)
+                    memset(&topL[x], b, n);
             }
             uint32_t shown = sBgMask[b] & inAll & ~full; // shown: only transparency matters
             uint32_t part = sBgMask[b] & inSome & ~inAll; // shown in some pixels
@@ -1287,11 +1295,17 @@ static void Compose(int line, uint16_t *dst, const int bgOn[4], const int bgPrio
                             }
                         }
                     }
-                    else {
+                    else if (needTop) {
                         for (; x < x1; x++) {
                             if (!(src[x] & TRANSPARENT)) {
                                 dst[x] = src[x]; topL[x] = (uint8_t)b;
                             }
+                        }
+                    }
+                    else {
+                        for (; x < x1; x++) {
+                            if (!(src[x] & TRANSPARENT))
+                                dst[x] = src[x];
                         }
                     }
                 }
@@ -1303,11 +1317,17 @@ static void Compose(int line, uint16_t *dst, const int bgOn[4], const int bgPrio
                         }
                     }
                 }
-                else {
+                else if (needTop) {
                     for (; x < x1; x++) {
                         if (!(src[x] & TRANSPARENT) && (wm[x] & bit)) {
                             dst[x] = src[x]; topL[x] = (uint8_t)b;
                         }
+                    }
+                }
+                else {
+                    for (; x < x1; x++) {
+                        if (!(src[x] & TRANSPARENT) && (wm[x] & bit))
+                            dst[x] = src[x];
                     }
                 }
               }
@@ -1317,7 +1337,9 @@ static void Compose(int line, uint16_t *dst, const int bgOn[4], const int bgPrio
             for (int x = sObjMinX; x <= sObjMaxX; x++) {
                 if (sObj.prio[x] == p && !(sObj.color[x] & TRANSPARENT) && (wm[x] & 0x10)) {
                     if (needSec) { secC[x] = dst[x]; secL[x] = topL[x]; }
-                    dst[x] = sObj.color[x]; topL[x] = L_OBJ;
+                    dst[x] = sObj.color[x];
+                    if (needTop)
+                        topL[x] = L_OBJ;
                 }
             }
         }

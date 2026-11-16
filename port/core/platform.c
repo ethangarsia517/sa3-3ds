@@ -27,7 +27,7 @@ extern uint8_t FLASH_BASE[FLASH_ROM_SIZE_1M * SECTORS_PER_BANK];
 extern void AgbMain(void);
 
 // (a backend from another version of the repo fails to link: see port.h)
-__attribute__((used)) static const int *const sBackendVersion = &Backend_Version3_UpdateRepoIfMissing;
+__attribute__((used)) static const int *const sBackendVersion = &Backend_Version4_UpdateRepoIfMissing;
 
 static uint16_t sFrame[DISPLAY_WIDTH * DISPLAY_HEIGHT] __attribute__((aligned(64)));
 static uint32_t sFrameCount;
@@ -138,6 +138,28 @@ void Platform_QueueAudio(const void *data, u32 numBytes)
     Backend_QueueAudio(sPcm, frames, AUDIO_RATE);
 }
 
+// --- Sound on another core -------------------------------------------------------
+//
+// The game's m4aSoundMain (the music's sequencer and the mixing of a frame of
+// sound) only notes a request here (patches/sa3.patch, m4a.c). The requests
+// are run while the next frame is drawn, on another core when the backend
+// has one (Backend_StartWorker), and waited for before the VBlank interrupt,
+// whose m4aSoundVSync hands the mixed frame over: the same order as the
+// game's own. The game's code doesn't run while a frame is drawn (but for
+// its HBlank effects, which don't touch sound), so nothing else touches the
+// sound's state meanwhile.
+
+extern void SoundMain(void);
+static int sSoundRequests;
+
+void Port_SoundMainRequest(void) { sSoundRequests++; }
+
+static void RunSound(void *arg)
+{
+    for (int n = (int)(intptr_t)arg; n > 0; n--)
+        SoundMain();
+}
+
 // --- Frame loop ---------------------------------------------------------------
 
 // The game waits here for the next frame: draw this one (running the
@@ -146,6 +168,12 @@ void Platform_QueueAudio(const void *data, u32 numBytes)
 void VBlankIntrWait(void)
 {
     REG_KEYINPUT = KEYS_MASK ^ Backend_PollKeys();
+
+    int sound = sSoundRequests;
+    sSoundRequests = 0;
+    bool soundAsync = sound > 0 && Backend_StartWorker(RunSound, (void *)(intptr_t)sound);
+    if (sound > 0 && !soundAsync)
+        RunSound((void *)(intptr_t)sound); // (no other core: here, as the game would)
 
     sStep = STEP_DRAW;
     if (Backend_ShouldDraw()) {
@@ -164,6 +192,8 @@ void VBlankIntrWait(void)
         REG_VCOUNT = DISPLAY_HEIGHT + 1;
         Backend_Mark(MARK_UNDRAWN);
     }
+    if (soundAsync)
+        Backend_WaitWorker(); // (before m4aSoundVSync, in the VBlank interrupt)
 
     sStep = STEP_VBLANK_INTR;
     REG_DISPSTAT |= INTR_FLAG_VBLANK;

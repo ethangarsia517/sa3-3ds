@@ -87,6 +87,10 @@ enum {
     MARK_SAVE,     // the save image's check
 };
 void Backend_Mark(int what);
+// Runs fn(arg) on another core, if there is one for it: false if not (the
+// caller then runs it itself). Backend_WaitWorker waits for it to end.
+bool Backend_StartWorker(void (*fn)(void *), void *arg);
+void Backend_WaitWorker(void);
 // Whether to draw this frame (frame skip): asked before each frame; when
 // not, Backend_DrawStart and Backend_Present are not called for it.
 bool Backend_ShouldDraw(void);
@@ -106,6 +110,6 @@ void Backend_Fatal(const char *msg) __attribute__((noreturn));
 
 // Renamed whenever the backend and the core must change together: linking an
 // old port/3ds/main.c with a newer sa3-game.o fails naming this symbol.
-extern const int Backend_Version3_UpdateRepoIfMissing;
+extern const int Backend_Version4_UpdateRepoIfMissing;
 
 #endif

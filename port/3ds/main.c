@@ -29,7 +29,7 @@
 #define DEBUG_FLAG DATA_DIR "/debug.txt"
 #define CPU_VIDEO_FLAG DATA_DIR "/cpu-video.txt" // the picture copied by the CPU, not the GPU
 
-const int Backend_Version3_UpdateRepoIfMissing = 1;
+const int Backend_Version4_UpdateRepoIfMissing = 1;
 
 // The main thread's stack (libctru's default is 32 KiB; PC builds have MBs).
 u32 __stacksize__ = 1024 * 1024;
@@ -41,6 +41,8 @@ static int sAudioOn;
 static int sScaled = 1; // 1.5x (Y switches to 1:1)
 static int sSkipOn = 1; // frame skip (touching the bottom screen switches it)
 static bool sGpu;       // the GPU puts the picture on the screen (else the CPU copies it)
+static int sWorkerCore = -1;    // the worker's core (the game's sound); -1: none
+static volatile u64 sWorkTicks; // the work's time on its core (meter window)
 
 // --- Timing / performance meter ---------------------------------------------
 
@@ -52,8 +54,8 @@ static int sLate;
 // code; drawing and presenting (drawn frames); a frame not drawn's lines; the
 // VBlank interrupt; the rest (save check and file, OS); waiting for the screen.
 // And the parts of the window's slowest frame (sWorst).
-enum { T_GAME, T_DRAW, T_PRESENT, T_UNDRAWN, T_VBLANK, T_OTHER, T_WAIT, T_COUNT };
-static const char *const sPartNames[T_COUNT] = { "game", "draw", "present", "undrawn", "vblank", "other", "wait" };
+enum { T_GAME, T_DRAW, T_PRESENT, T_UNDRAWN, T_SOUNDWAIT, T_VBLANK, T_OTHER, T_WAIT, T_COUNT };
+static const char *const sPartNames[T_COUNT] = { "game", "draw", "present", "undrawn", "soundwait", "vblank", "other", "wait" };
 static u64 sPartTicks[T_COUNT];
 static u64 sFrameTicks[T_COUNT], sWorst[T_COUNT];
 static u64 sMarkTick;
@@ -144,10 +146,12 @@ static void MeterEndFrame(void)
     PrintStatus();
     if (sLog != NULL && Port_FrameCount() % 300 < 60) {
         // draw and present: per drawn frame; the rest per frame
-        Backend_Log("frame %lu%s: %.1f fps (drawn %.1f), ms per frame: game %.2f vblank %.2f undrawn %.2f other %.2f wait %.2f;"
-                    " per drawn frame: draw %.2f present %.2f; late %lu",
+        Backend_Log("frame %lu%s: %.1f fps (drawn %.1f), ms per frame: game %.2f sound %.2f (core %d, waited %.2f) vblank %.2f"
+                    " undrawn %.2f other %.2f wait %.2f; per drawn frame: draw %.2f present %.2f; late %lu",
                     (unsigned long)Port_FrameCount(), LevelTimeText(), (double)sFps, (double)sDrawnFps,
-                    (double)TicksToMs(sPartTicks[T_GAME], sMeterFrames), (double)TicksToMs(sPartTicks[T_VBLANK], sMeterFrames),
+                    (double)TicksToMs(sPartTicks[T_GAME], sMeterFrames), (double)TicksToMs(sWorkTicks, sMeterFrames),
+                    sWorkerCore < 0 ? 0 : sWorkerCore, (double)TicksToMs(sPartTicks[T_SOUNDWAIT], sMeterFrames),
+                    (double)TicksToMs(sPartTicks[T_VBLANK], sMeterFrames),
                     (double)TicksToMs(sPartTicks[T_UNDRAWN], sMeterFrames), (double)TicksToMs(sPartTicks[T_OTHER], sMeterFrames),
                     (double)TicksToMs(sPartTicks[T_WAIT], sMeterFrames),
                     (double)TicksToMs(sPartTicks[T_DRAW], sMeterDrawn), (double)TicksToMs(sPartTicks[T_PRESENT], sMeterDrawn),
@@ -185,6 +189,7 @@ static void MeterEndFrame(void)
     (void)sProfTotal;
     memset(sPartTicks, 0, sizeof(sPartTicks));
     memset(sWorst, 0, sizeof(sWorst));
+    sWorkTicks = 0;
     sSpikesLogged = 0;
     sMeterFrames = sMeterLate = sMeterDrawn = 0;
     sMeterStart = now;
@@ -204,6 +209,65 @@ static void WaitForFrame(void)
     }
     gspWaitForVBlank();
     sDeadline = svcGetSystemTick() + FRAME_TICKS;
+}
+
+// --- Worker on another core (the game's sound) -------------------------------------------
+//
+// New 3DS models: core 2, free for apps. Old ones: core 1, the system's,
+// which an app may use up to a share of its time (APT_SetAppCpuTimeLimit,
+// 80%). If neither can be had, the core runs the work itself.
+
+static Thread sWorker;
+static LightEvent sWorkStart, sWorkDone;
+static void (*volatile sWorkFn)(void *);
+static void *volatile sWorkArg;
+static void WorkerMain(void *unused)
+{
+    for (;;) {
+        LightEvent_Wait(&sWorkStart);
+        u64 t0 = svcGetSystemTick();
+        sWorkFn(sWorkArg);
+        sWorkTicks += svcGetSystemTick() - t0;
+        LightEvent_Signal(&sWorkDone);
+    }
+}
+
+static void WorkerInit(void)
+{
+    LightEvent_Init(&sWorkStart, RESET_ONESHOT);
+    LightEvent_Init(&sWorkDone, RESET_ONESHOT);
+    bool n3ds = false;
+    APT_CheckNew3DS(&n3ds);
+    if (n3ds) {
+        sWorker = threadCreate(WorkerMain, NULL, 64 * 1024, 0x20, 2, true);
+        if (sWorker)
+            sWorkerCore = 2;
+    }
+    if (sWorkerCore < 0 && R_SUCCEEDED(APT_SetAppCpuTimeLimit(80))) {
+        sWorker = threadCreate(WorkerMain, NULL, 64 * 1024, 0x20, 1, true);
+        if (sWorker)
+            sWorkerCore = 1;
+    }
+    if (sWorkerCore < 0)
+        Backend_Log("worker: none (sound on the main core)");
+    else
+        Backend_Log("worker: core %d (sound)", sWorkerCore);
+}
+
+bool Backend_StartWorker(void (*fn)(void *), void *arg)
+{
+    if (sWorkerCore < 0)
+        return false;
+    sWorkFn = fn;
+    sWorkArg = arg;
+    LightEvent_Signal(&sWorkStart);
+    return true;
+}
+
+void Backend_WaitWorker(void)
+{
+    LightEvent_Wait(&sWorkDone);
+    Part(T_SOUNDWAIT);
 }
 
 // --- Frame skip -----------------------------------------------------------------------
@@ -455,6 +519,10 @@ static void PrintStatus(void)
     printf("Picture: %dx%d %s   \n", Port_DisplayWidth(), Port_DisplayHeight(),
            (sScaled && Port_DisplayWidth() * 3 / 2 <= TOP_W) ? "1.5x" : "1:1 ");
     printf("Video  : %s\n", sGpu ? "GPU" : "CPU");
+    if (sWorkerCore < 0)
+        printf("Sound  : main core\n");
+    else
+        printf("Sound  : core %d\n", sWorkerCore);
     printf("Y      : 1:1 / 1.5x\n");
     printf("Touch  : frame skip %s  \n", sSkipOn ? "on " : "off");
     printf("HOME   : exit\n\n");
@@ -743,7 +811,7 @@ static void Watchdog(void *arg)
         if (!reported || now - lastChange > (u64)(3 + 10 * reported) * SYSCLOCK_ARM11) {
             char line[160];
             consoleSelect(&sConsole);
-            printf("\x1b[16;1H\x1b[31mNo frame for %lu s:\x1b[0m        \n",
+            printf("\x1b[17;1H\x1b[31mNo frame for %lu s:\x1b[0m        \n",
                    (unsigned long)((now - lastChange) / SYSCLOCK_ARM11));
             Backend_Log("watchdog: no frame for %lu s", (unsigned long)((now - lastChange) / SYSCLOCK_ARM11));
             for (int i = 0; i < 4; i++) {
@@ -814,6 +882,7 @@ int main(void)
             sLogWriterRun = 0;
     }
     GpuInit();
+    WorkerInit();
     BuildScaleMaps();
     ClearTop();
     AudioInit();

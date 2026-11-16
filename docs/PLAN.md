@@ -85,6 +85,10 @@ Not checked: the final devkitARM link, 3dsxtool, and anything at run time.
    - sprites: regular ones a tile row at a time (transparent rows skipped),
      rotated ones stepped (the same pixels); background lines counted by
      path (cached, decoded, mosaic, rotated);
+   - the game's sound (m4aSoundMain: sequencer and mixing) on another
+     core, run while the next frame is drawn (New 3DS: core 2; Old 3DS:
+     core 1, up to 80%); compose keeps the top layer only when an effect
+     needs it; rotated backgrounds read the palette by halfwords;
    - next: drawing split across both cores (Old 3DS: up to 80% of the
      system core; New 3DS: a free core);
    - present on the GPU (citro3d) with scaling, as pmd-red-3ds does, instead

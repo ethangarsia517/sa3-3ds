@@ -73,6 +73,10 @@ and presenting per drawn frame; then where the drawing time went
 (backgrounds, sprites, compositing, the frame's setup, the game's HBlank
 interrupts). Full speed is 16.7 ms a frame in all. (The profile costs a
 little time itself, so frame rates are a bit lower with `debug.txt`.)
+The bottom screen and the log say where the game's sound runs: on core 2
+(New 3DS) or core 1 (Old 3DS), alongside drawing, or on the main core if
+neither could be had.
+
 In a level, each line also gives the level's time as the HUD shows it
 (`level 1:23.45`), and any single frame over 40 ms gets a `spike:` line with
 the level time and what the frame spent its time on.
