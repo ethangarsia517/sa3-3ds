@@ -73,6 +73,9 @@ and presenting per drawn frame; then where the drawing time went
 (backgrounds, sprites, compositing, the frame's setup, the game's HBlank
 interrupts). Full speed is 16.7 ms a frame in all. (The profile costs a
 little time itself, so frame rates are a bit lower with `debug.txt`.)
+In a level, each line also gives the level's time as the HUD shows it
+(`level 1:23.45`), and any single frame over 40 ms gets a `spike:` line with
+the level time and what the frame spent its time on.
 
 **Saves:** not yet. sa3's portable build doesn't save yet (it reports no
 flash chip, as its SDL build does). The port loads and writes

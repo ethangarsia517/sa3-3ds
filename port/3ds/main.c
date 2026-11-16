@@ -35,7 +35,8 @@ const int Backend_Version3_UpdateRepoIfMissing = 1;
 u32 __stacksize__ = 1024 * 1024;
 
 static PrintConsole sConsole;
-static FILE *sLog;
+static volatile int sLogWriterRun; // (the log's writer thread runs: Backend_Log)
+static void LogWrite(void);
 static int sAudioOn;
 static int sScaled = 1; // 1.5x (Y switches to 1:1)
 static int sSkipOn = 1; // frame skip (touching the bottom screen switches it)
@@ -79,7 +80,26 @@ void Backend_Mark(int what)
     }
 }
 
-// End of a frame's timing: the window's slowest frame (not counting the wait)
+// "level 1:23.45" (the HUD's time) or "" outside a level
+static const char *LevelTimeText(void)
+{
+    static char buf[32];
+    int t = Port_LevelTime();
+    if (t < 0)
+        return "";
+    snprintf(buf, sizeof(buf), " level %d:%02d.%02d", t / 3600, (t / 60) % 60, (t % 60) * 100 / 60);
+    return buf;
+}
+
+static float TicksToMs(u64 ticks, u32 frames);
+
+// End of a frame's timing: the window's slowest frame (not counting the
+// wait), and a line for a frame that took over SPIKE_MS (at most a few a
+// window), with the level time, so it can be matched with what was on the
+// screen.
+#define SPIKE_MS 40
+static int sSpikesLogged;
+static FILE *sLog;
 static void FrameTimed(void)
 {
     u64 busy = 0, worst = 0;
@@ -90,6 +110,16 @@ static void FrameTimed(void)
         }
     if (busy > worst)
         memcpy(sWorst, sFrameTicks, sizeof(sWorst));
+    if (sLog != NULL && TicksToMs(busy, 1) > SPIKE_MS && sSpikesLogged < 5) {
+        sSpikesLogged++;
+        char parts[160];
+        int n = 0;
+        for (int i = 0; i < T_COUNT && n < (int)sizeof(parts); i++)
+            if (i != T_WAIT)
+                n += snprintf(parts + n, sizeof(parts) - n, " %s %.1f", sPartNames[i], (double)TicksToMs(sFrameTicks[i], 1));
+        Backend_Log("spike: frame %lu%s, %.1f ms:%s", (unsigned long)Port_FrameCount(), LevelTimeText(),
+                    (double)TicksToMs(busy, 1), parts);
+    }
     memset(sFrameTicks, 0, sizeof(sFrameTicks));
 }
 
@@ -114,9 +144,9 @@ static void MeterEndFrame(void)
     PrintStatus();
     if (sLog != NULL && Port_FrameCount() % 300 < 60) {
         // draw and present: per drawn frame; the rest per frame
-        Backend_Log("frame %lu: %.1f fps (drawn %.1f), ms per frame: game %.2f vblank %.2f undrawn %.2f other %.2f wait %.2f;"
+        Backend_Log("frame %lu%s: %.1f fps (drawn %.1f), ms per frame: game %.2f vblank %.2f undrawn %.2f other %.2f wait %.2f;"
                     " per drawn frame: draw %.2f present %.2f; late %lu",
-                    (unsigned long)Port_FrameCount(), (double)sFps, (double)sDrawnFps,
+                    (unsigned long)Port_FrameCount(), LevelTimeText(), (double)sFps, (double)sDrawnFps,
                     (double)TicksToMs(sPartTicks[T_GAME], sMeterFrames), (double)TicksToMs(sPartTicks[T_VBLANK], sMeterFrames),
                     (double)TicksToMs(sPartTicks[T_UNDRAWN], sMeterFrames), (double)TicksToMs(sPartTicks[T_OTHER], sMeterFrames),
                     (double)TicksToMs(sPartTicks[T_WAIT], sMeterFrames),
@@ -155,6 +185,7 @@ static void MeterEndFrame(void)
     (void)sProfTotal;
     memset(sPartTicks, 0, sizeof(sPartTicks));
     memset(sWorst, 0, sizeof(sWorst));
+    sSpikesLogged = 0;
     sMeterFrames = sMeterLate = sMeterDrawn = 0;
     sMeterStart = now;
 }
@@ -584,6 +615,8 @@ static void Shutdown(void)
     }
     if (sGpu)
         C3D_Fini();
+    sLogWriterRun = 0;
+    LogWrite();
     if (sLog)
         fclose(sLog);
     gfxExit();
@@ -606,6 +639,36 @@ void Backend_EndFrame(void)
 
 static LightLock sLogLock;
 
+// The log's lines are kept in memory and written to the SD card by a thread
+// of the lowest priority (it runs while the game waits for the screen), so
+// the game doesn't stop for the card (50-60 ms a write). If the buffer
+// fills before the thread gets to it, the line is written right away.
+#define LOG_BUF 16384
+static char sLogBuf[LOG_BUF];
+static int sLogLen;
+
+static void LogWrite(void)
+{
+    static char out[LOG_BUF];
+    LightLock_Lock(&sLogLock);
+    int n = sLogLen;
+    memcpy(out, sLogBuf, n);
+    sLogLen = 0;
+    LightLock_Unlock(&sLogLock);
+    if (n > 0 && sLog != NULL) {
+        fwrite(out, 1, n, sLog);
+        fflush(sLog);
+    }
+}
+
+static void LogWriter(void *arg)
+{
+    while (sLogWriterRun) {
+        svcSleepThread(500 * 1000 * 1000LL);
+        LogWrite();
+    }
+}
+
 void Backend_Log(const char *fmt, ...)
 {
     char buf[256];
@@ -615,11 +678,27 @@ void Backend_Log(const char *fmt, ...)
     va_end(ap);
     svcOutputDebugString(buf, (s32)strlen(buf));
     if (sLog != NULL) {
+        int len = (int)strlen(buf);
         LightLock_Lock(&sLogLock);
-        fputs(buf, sLog);
-        fputc('\n', sLog);
-        fflush(sLog);
+        bool full = sLogLen + len + 1 > LOG_BUF;
+        if (!full) {
+            memcpy(sLogBuf + sLogLen, buf, len);
+            sLogBuf[sLogLen + len] = '\n';
+            sLogLen += len + 1;
+        }
         LightLock_Unlock(&sLogLock);
+        if (full) {
+            LogWrite();
+            LightLock_Lock(&sLogLock);
+            if (sLogLen + len + 1 <= LOG_BUF) {
+                memcpy(sLogBuf + sLogLen, buf, len);
+                sLogBuf[sLogLen + len] = '\n';
+                sLogLen += len + 1;
+            }
+            LightLock_Unlock(&sLogLock);
+        }
+        if (!sLogWriterRun)
+            LogWrite(); // (no writer thread: at once)
     }
 }
 
@@ -679,6 +758,7 @@ static void Watchdog(void *arg)
         hidScanInput();
         if ((hidKeysHeld() & (KEY_START | KEY_SELECT)) == (KEY_START | KEY_SELECT)) {
             Backend_Log("watchdog: quit");
+            LogWrite();
             if (sLog)
                 fclose(sLog);
             svcExitProcess();
@@ -727,8 +807,12 @@ int main(void)
     if (!threadCreate(Watchdog, NULL, 16 * 1024, prio - 1, -2, true))
         Backend_Log("watchdog: could not start");
 
-    if (sLog)
+    if (sLog) {
         Port_SetProfiling(svcGetSystemTick); // (the drawing profile in port.log)
+        sLogWriterRun = 1;
+        if (!threadCreate(LogWriter, NULL, 16 * 1024, 0x3F, -2, true))
+            sLogWriterRun = 0;
+    }
     GpuInit();
     BuildScaleMaps();
     ClearTop();

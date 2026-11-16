@@ -19,6 +19,7 @@
 #include "platform/shared/dma.h"
 #include "platform/shared/audio/cgb_audio.h"
 #include "task.h"
+#include "game/sa3/stage/stage.h"
 #include "port.h"
 
 extern IntrFunc gIntrTable[16];
@@ -30,6 +31,12 @@ __attribute__((used)) static const int *const sBackendVersion = &Backend_Version
 
 static uint16_t sFrame[DISPLAY_WIDTH * DISPLAY_HEIGHT] __attribute__((aligned(64)));
 static uint32_t sFrameCount;
+
+int Port_LevelTime(void)
+{
+    // In a level while its entities manager runs; the time, as the HUD's
+    return gStageData.taskEntitiesManager != NULL ? (int)gStageData.levelTimer : -1;
+}
 
 int Port_DisplayWidth(void) { return DISPLAY_WIDTH; }
 int Port_DisplayHeight(void) { return DISPLAY_HEIGHT; }
@@ -71,38 +78,40 @@ void Port_Describe(char *buf, int size)
 // IdentifyFlash reports no chip, so the game runs without saving, as the SDL
 // build does. This is ready for when it does.)
 
-static uint32_t sSaveSum;
-
-static uint32_t SaveSum(void)
-{
-    const uint32_t *p = (const uint32_t *)FLASH_BASE;
-    uint32_t a = 1, b = 0;
-    for (size_t i = 0; i < sizeof(FLASH_BASE) / 4; i++) {
-        a += p[i];
-        b += a ^ (uint32_t)i;
-    }
-    return a ^ (b << 1);
-}
+// The save: the first 128 KiB of FLASH_BASE (a 1 Mbit chip; sa3 declares
+// FLASH_BASE as 16 banks, 2 MiB, which the first builds checked whole once a
+// second: a 26-36 ms stall). Compared with a copy SAVE_STEP bytes a frame,
+// so no frame pays for it; written after a pass that found a change.
+#define SAVE_SIZE FLASH_ROM_SIZE_1M
+#define SAVE_STEP 0x2000 // (16 frames a pass)
+static uint8_t sSaveCopy[SAVE_SIZE];
+static uint32_t sSavePos;
+static bool sSaveChanged;
 
 static void SaveInit(void)
 {
-    memset(FLASH_BASE, 0xFF, sizeof(FLASH_BASE));
-    Backend_LoadSave(FLASH_BASE, sizeof(FLASH_BASE));
-    sSaveSum = SaveSum();
+    memset(FLASH_BASE, 0xFF, SAVE_SIZE);
+    Backend_LoadSave(FLASH_BASE, SAVE_SIZE);
+    memcpy(sSaveCopy, FLASH_BASE, SAVE_SIZE);
 }
 
 static void SaveTick(void)
 {
-    if (sFrameCount % 60 != 0)
-        return;
-    uint32_t sum = SaveSum();
-    if (sum != sSaveSum) {
-        sSaveSum = sum;
-        Backend_StoreSave(FLASH_BASE, sizeof(FLASH_BASE));
+    if (memcmp(&FLASH_BASE[sSavePos], &sSaveCopy[sSavePos], SAVE_STEP) != 0) {
+        memcpy(&sSaveCopy[sSavePos], &FLASH_BASE[sSavePos], SAVE_STEP);
+        sSaveChanged = true;
+    }
+    sSavePos += SAVE_STEP;
+    if (sSavePos >= SAVE_SIZE) {
+        sSavePos = 0;
+        if (sSaveChanged) {
+            sSaveChanged = false;
+            Backend_StoreSave(FLASH_BASE, SAVE_SIZE);
+        }
     }
 }
 
-void Platform_StoreSaveFile(void) { Backend_StoreSave(FLASH_BASE, sizeof(FLASH_BASE)); }
+void Platform_StoreSaveFile(void) { Backend_StoreSave(FLASH_BASE, SAVE_SIZE); }
 
 // --- Sound --------------------------------------------------------------------
 //

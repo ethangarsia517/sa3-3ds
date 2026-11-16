@@ -37,6 +37,8 @@ void Port_Main(void) __attribute__((noreturn));
 int Port_DisplayWidth(void);
 int Port_DisplayHeight(void);
 uint32_t Port_FrameCount(void);
+// The level's time (as the HUD shows it), in frames; -1 outside a level.
+int Port_LevelTime(void);
 // A line describing what the game is doing right now (frame, which step of
 // the frame loop, scanline, the running task), for the backend's watchdog.
 // Only reads memory: safe to call from another thread while the game hangs.
