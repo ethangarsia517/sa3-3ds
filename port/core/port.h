@@ -74,6 +74,18 @@ enum {
 };
 void Port_TakeStats(uint32_t out[STAT_COUNT]);
 
+// --- Frame dump ------------------------------------------------------------------
+// The next drawn frame's video state, for tools/test/render_dump on the
+// computer: Backend_SaveDump gets it when the frame is drawn. Layout (all
+// little-endian): "SA3D", u32 version (1), u32 width, u32 height, then VRAM
+// (0x18000), the palette (0x400) and OAM (0x400) as the frame began, the
+// display registers (the first 0x60 bytes of the I/O registers) as each line
+// was drawn (height x 0x60), and the palette as the frame ended (0x400: the
+// game may change it during the frame).
+#define DUMP_REGS 0x60
+void Port_RequestDump(void);
+void Backend_SaveDump(const void *data, uint32_t size);
+
 // --- Backend (implemented once per platform) ------------------------------------
 
 // The frame's drawing starts now (the performance meter: game logic until
@@ -110,6 +122,6 @@ void Backend_Fatal(const char *msg) __attribute__((noreturn));
 
 // Renamed whenever the backend and the core must change together: linking an
 // old port/3ds/main.c with a newer sa3-game.o fails naming this symbol.
-extern const int Backend_Version4_UpdateRepoIfMissing;
+extern const int Backend_Version5_UpdateRepoIfMissing;
 
 #endif

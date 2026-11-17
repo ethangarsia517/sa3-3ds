@@ -178,7 +178,7 @@ index db16125..8f5bbe7 100644
  void m4aSongNumStart(u16 n)
  {
 diff --git a/src/platform/shared/audio/m4a_sound_mixer.c b/src/platform/shared/audio/m4a_sound_mixer.c
-index 192e07d..ab0b470 100644
+index 192e07d..ff367d0 100644
 --- a/src/platform/shared/audio/m4a_sound_mixer.c
 +++ b/src/platform/shared/audio/m4a_sound_mixer.c
 @@ -372,6 +372,13 @@ void MP2K_event_fine(struct MP2KPlayerState *unused, struct MP2KTrack *track)
@@ -195,6 +195,19 @@ index 192e07d..ab0b470 100644
      uintptr_t addr = 0;
      for (size_t i = sizeof(uintptr_t) - 1; i > 0; i--) {
          addr |= cmdPtr[i];
+@@ -386,7 +393,12 @@ void MP2K_event_patt(struct MP2KPlayerState *unused, struct MP2KTrack *track)
+ {
+     u8 level = track->patternLevel;
+     if (level < 3) {
++#if PLATFORM_3DS
++        // sa3-3ds: the target is a 4-byte self-relative offset (MP2K_event_goto)
++        track->patternStack[level] = track->cmdPtr + 4;
++#else
+         track->patternStack[level] = track->cmdPtr + sizeof(u8 *);
++#endif
+         track->patternLevel++;
+         MP2K_event_goto(unused, track);
+     } else {
 diff --git a/src/platform/shared/dma.c b/src/platform/shared/dma.c
 index 8177621..335a793 100644
 --- a/src/platform/shared/dma.c
@@ -208,6 +221,20 @@ index 8177621..335a793 100644
  {
      for (int dmaNum = 0; dmaNum < DMA_COUNT; dmaNum++) {
          struct DMATransfer *dma = &DMAList[dmaNum];
+diff --git a/src/sprite.c b/src/sprite.c
+index 01961e2..7f6964c 100644
+--- a/src/sprite.c
++++ b/src/sprite.c
+@@ -895,6 +895,9 @@ void DisplaySprite(Sprite *s)
+             }
+             oam->split.x = (x + sprX);
+             oam->split.y = (y + sprY);
++            // The matching code clears attr0 bit 8 (attr0 &= 0xFE00); some frame
++            // data has it set, which would make the sprite affine with a stale matrix.
++            oam->all.attr0 &= ~0x100;
+             oam->all.attr0 |= sp14;
+             oam->all.attr1 |= sp18;
+             oam->all.attr2 |= sp1C;
 diff --git a/tools/preproc/preproc.cpp b/tools/preproc/preproc.cpp
 index 86b71a0..f804c5f 100644
 --- a/tools/preproc/preproc.cpp

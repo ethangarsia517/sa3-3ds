@@ -27,7 +27,7 @@ extern uint8_t FLASH_BASE[FLASH_ROM_SIZE_1M * SECTORS_PER_BANK];
 extern void AgbMain(void);
 
 // (a backend from another version of the repo fails to link: see port.h)
-__attribute__((used)) static const int *const sBackendVersion = &Backend_Version4_UpdateRepoIfMissing;
+__attribute__((used)) static const int *const sBackendVersion = &Backend_Version5_UpdateRepoIfMissing;
 
 static uint16_t sFrame[DISPLAY_WIDTH * DISPLAY_HEIGHT] __attribute__((aligned(64)));
 static uint32_t sFrameCount;

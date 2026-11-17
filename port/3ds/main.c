@@ -32,7 +32,7 @@
 #define CPU_VIDEO_FLAG DATA_DIR "/cpu-video.txt" // the picture copied by the CPU, not the GPU
 #define SYSCORE_FLAG DATA_DIR "/syscore.txt"     // Old 3DS: the sound on the system core
 
-const int Backend_Version4_UpdateRepoIfMissing = 1;
+const int Backend_Version5_UpdateRepoIfMissing = 1;
 
 // The main thread's stack (libctru's default is 32 KiB; PC builds have MBs).
 u32 __stacksize__ = 1024 * 1024;
@@ -43,6 +43,8 @@ static void LogWrite(void);
 static int sAudioOn;
 static int sScaled = 1; // 1.5x (Y switches to 1:1)
 static int sSkipOn = 1; // frame skip (touching the bottom screen switches it)
+static int sDumpNote;   // the status line about frame dumps: 1 asked for, 2 saved, 3 failed
+static int sDumpNum;    // the last dump's number
 static bool sGpu;       // the GPU puts the picture on the screen (else the CPU copies it)
 static int sWorkerCore = -1;    // the worker's core (the game's sound); -1: none
 static volatile u64 sWorkTicks; // the work's time on its core (meter window)
@@ -557,6 +559,14 @@ static void PrintStatus(void)
         printf("Sound  : core %d\n", sWorkerCore);
     printf("Y      : 1:1 / 1.5x\n");
     printf("Touch  : frame skip %s  \n", sSkipOn ? "on " : "off");
+    if (sDumpNote == 1)
+        printf("Corner : dumping the next frame...    \n");
+    else if (sDumpNote == 2)
+        printf("Corner : saved dump-%03d.bin           \n", sDumpNum);
+    else if (sDumpNote == 3)
+        printf("Corner : \x1b[31mcouldn't save the dump\x1b[0m        \n");
+    else
+        printf("Corner : frame dump (bottom right)    \n");
     printf("HOME   : exit\n\n");
     printf("Speed  : %5.1f fps   \n", (double)sFps);
     printf("Drawn  : %5.1f fps   \n", (double)sDrawnFps);
@@ -579,7 +589,14 @@ uint16_t Backend_PollKeys(void)
         PrintStatus();
     }
     if (down & KEY_TOUCH) {
-        sSkipOn = !sSkipOn;
+        touchPosition t;
+        hidTouchRead(&t);
+        if (t.px >= 240 && t.py >= 180) {
+            Port_RequestDump(); // the bottom-right corner: a frame dump
+            sDumpNote = 1;
+        } else {
+            sSkipOn = !sSkipOn;
+        }
         PrintStatus();
     }
     u32 h = hidKeysHeld();
@@ -703,6 +720,35 @@ static void FlushSave(void)
     remove(SAVE_PATH);
     rename(SAVE_TMP_PATH, SAVE_PATH);
     Backend_Log("save: written");
+}
+
+// --- Frame dump ----------------------------------------------------------------------
+//
+// sdmc:/3ds/sa3-3ds/dump-NNN.bin, the next free number: the video state of a
+// frame (port.h), for tools/test/render_dump. It holds the game's graphics:
+// keep it to yourself.
+
+void Backend_SaveDump(const void *data, uint32_t size)
+{
+    char path[64];
+    for (int n = 1; n < 1000; n++) {
+        snprintf(path, sizeof(path), DATA_DIR "/dump-%03d.bin", n);
+        struct stat st;
+        if (stat(path, &st) == 0)
+            continue;
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        bool ok = fd >= 0 && write(fd, data, size) == (ssize_t)size;
+        if (fd >= 0)
+            close(fd);
+        sDumpNum = n;
+        sDumpNote = ok ? 2 : 3;
+        Backend_Log("dump: %s %s (frame %lu%s)", path, ok ? "saved" : "FAILED", (unsigned long)Port_FrameCount(),
+                    LevelTimeText());
+        PrintStatus();
+        return;
+    }
+    sDumpNote = 3;
+    PrintStatus();
 }
 
 // --- Frame end, log, errors ---------------------------------------------------------
@@ -842,7 +888,7 @@ static void Watchdog(void *arg)
         if (!reported || now - lastChange > (u64)(3 + 10 * reported) * SYSCLOCK_ARM11) {
             char line[160];
             consoleSelect(&sConsole);
-            printf("\x1b[17;1H\x1b[31mNo frame for %lu s:\x1b[0m        \n",
+            printf("\x1b[18;1H\x1b[31mNo frame for %lu s:\x1b[0m        \n",
                    (unsigned long)((now - lastChange) / SYSCLOCK_ARM11));
             Backend_Log("watchdog: no frame for %lu s", (unsigned long)((now - lastChange) / SYSCLOCK_ARM11));
             for (int i = 0; i < 4; i++) {

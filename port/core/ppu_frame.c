@@ -5,6 +5,7 @@
 // Also: a frame not drawn (frame skip), and the drawing profile.
 
 #include <stdint.h>
+#include <string.h>
 
 #include "global.h"
 #include "core.h"
@@ -76,6 +77,40 @@ void Ppu_RunFrameUndrawn(void)
     }
 }
 
+// --- Frame dump (port.h) ----------------------------------------------------------
+
+#define DUMP_VRAM 0x18000
+struct Dump {
+    char magic[4];
+    uint32_t version, width, height;
+    uint8_t vram[DUMP_VRAM];
+    uint8_t pltt[0x400];
+    uint8_t oam[0x400];
+    uint8_t regs[DISPLAY_HEIGHT][DUMP_REGS];
+    uint8_t plttEnd[0x400];
+};
+static struct Dump sDump;
+static bool sDumpWanted;
+
+void Port_RequestDump(void) { sDumpWanted = true; }
+
+static void DumpBegin(void)
+{
+    memcpy(sDump.magic, "SA3D", 4);
+    sDump.version = 1;
+    sDump.width = DISPLAY_WIDTH;
+    sDump.height = DISPLAY_HEIGHT;
+    memcpy(sDump.vram, VRAM, DUMP_VRAM);
+    memcpy(sDump.pltt, PLTT, 0x400);
+    memcpy(sDump.oam, OAM, 0x400);
+}
+
+static void DumpEnd(void)
+{
+    memcpy(sDump.plttEnd, PLTT, 0x400);
+    Backend_SaveDump(&sDump, sizeof(sDump));
+}
+
 #if !SA3_3DS_WIDE
 
 // pmd/port.h and pmd/bgcache.h (not included: they're plain stdint C, and
@@ -88,6 +123,10 @@ void Ppu_DrawFramePmd(uint16_t *out)
 {
     uint64_t (*ticks)(void) = gPpuTicks;
     uint64_t t0 = ticks ? ticks() : 0;
+    bool dump = sDumpWanted;
+    sDumpWanted = false;
+    if (dump)
+        DumpBegin();
     BgCache_Prepare(REG_BASE, 0); // (before the first line)
     Ppu_BeginFrame();
     uint64_t t1 = ticks ? ticks() : 0;
@@ -97,12 +136,16 @@ void Ppu_DrawFramePmd(uint16_t *out)
         uint64_t a = ticks ? ticks() : 0;
         LineStart(line);
         uint64_t b = ticks ? ticks() : 0;
+        if (dump)
+            memcpy(sDump.regs[line], REG_BASE, DUMP_REGS);
         Ppu_RenderLine(line, &out[line * DISPLAY_WIDTH]);
         uint64_t c = ticks ? ticks() : 0;
         LineEnd();
         uint64_t d = ticks ? ticks() : 0;
         sProf[PROF_LINES_OTHER] += (b - a) + (d - c); // the interrupts and DMAs
     }
+    if (dump)
+        DumpEnd();
 }
 
 #endif

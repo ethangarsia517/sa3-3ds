@@ -16,7 +16,7 @@ BUILD    := $(ROOT)/build
 WIDE     ?= 0
 JOBS     ?= $(shell nproc 2>/dev/null || echo 4)
 
-.PHONY: all prelink 3ds clean test
+.PHONY: all prelink 3ds clean test render_dump
 all: 3ds
 
 # ---------------------------------------------------------------------------
@@ -40,6 +40,14 @@ test:
 	@cc -O2 -Wall -Wno-unused-parameter -o $(BUILD)/test_renderer tools/test/test_renderer.c tools/test/ppu_ref.c \
 		port/core/pmd/ppu.c port/core/pmd/bgcache.c port/core/pmd/pmd_glue.c -Iport/core/pmd
 	@$(BUILD)/test_renderer
+
+# A frame dump from the 3DS rendered on this computer (tools/test/render_dump.c):
+#   make render_dump && build/render_dump dump-001.bin
+render_dump:
+	@mkdir -p $(BUILD)
+	@cc -O2 -Wall -Wno-unused-parameter -o $(BUILD)/render_dump tools/test/render_dump.c tools/test/ppu_ref.c \
+		port/core/pmd/ppu.c port/core/pmd/bgcache.c port/core/pmd/pmd_glue.c -Iport/core/pmd
+	@echo "  ->   $(BUILD)/render_dump"
 
 clean:
 	rm -rf $(BUILD)/3ds $(PRELINK) $(BUILD)/sa3-3ds.*

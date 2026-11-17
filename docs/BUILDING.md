@@ -59,7 +59,8 @@ between the two needs `make clean` first.
 
 Controls are the GBA's: A (or X) jump, B, L, R (or ZL/ZR), START, SELECT, D-pad
 or Circle Pad. **Y** switches the picture between 1:1 and 1.5x. **Touching the
-bottom screen** switches frame skip on or off (on at first). **HOME** to quit.
+bottom screen** switches frame skip on or off (on at first), except its
+bottom-right corner, which saves a frame dump (below). **HOME** to quit.
 
 **Frame skip:** the game itself always runs 60 frames a second, so it plays and
 sounds at full speed; when there isn't time to draw a frame, it isn't drawn
@@ -90,3 +91,34 @@ the level time and what the frame spent its time on.
 **Saves:** not yet. sa3's portable build doesn't save yet (it reports no
 flash chip, as its SDL build does). The port loads and writes
 `SD:/3ds/sa3-3ds/sa3.sav` as soon as the game writes to its flash image.
+
+## Reporting graphics bugs: frame dumps
+
+Tap the **bottom-right corner** of the bottom screen while the bug is on the
+top screen. The next frame is saved as `SD:/3ds/sa3-3ds/dump-000.bin` (then
+001, 002…): video memory, palettes, sprites and every line's display
+registers. It holds the game's graphics, so keep it private as you would the
+ROM. On a PC (Linux or WSL):
+
+    make render_dump
+    build/render_dump dump-000.bin out/
+
+draws it with the port's renderer and with the reference GBA renderer
+(`port.ppm`, `ref.ppm`, `diff.ppm`), each background and the sprites alone
+(`bg0-3.ppm`, `obj.ppm`), and writes `report.txt` (display settings per line
+and the list of sprites). If port and reference agree, the bug is in what the
+game put in memory, not in the renderer.
+
+## Headless PC runner (Linux x86-64)
+
+After `make prelink`, `tools/host/build.sh` builds `build/sa3host`, the game
+with a backend that runs without a screen, driven by a script:
+
+    250 press START
+    480 shot menu
+    480 dump menu
+    482 quit
+
+`build/sa3host script.txt` writes `host-out/menu.ppm` and `host-out/menu.bin`
+(a frame dump as above). `press KEYS [n]` holds keys (e.g. `A+RIGHT`) for n
+frames. This reproduces most bugs without a 3DS.
